@@ -24,7 +24,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { propertySource } from '../data/property-source';
 import type { NlqParser } from '../nlq/parse';
 import { appRouter } from './index';
-import { setNlqParserForTesting } from './nlq';
+import { setEmbeddingIndexForTesting, setNlqParserForTesting, setRagGeneratorForTesting } from './nlq';
 
 /** Only the logger is read by these procedures; the rest of the Lambda context is irrelevant. */
 const noopLogger = {
@@ -82,6 +82,8 @@ async function rowsFor(query: {
 
 afterEach(() => {
   setNlqParserForTesting(null);
+  setRagGeneratorForTesting(null);
+  setEmbeddingIndexForTesting(undefined);
 });
 
 describe('nlq.config', () => {
@@ -317,5 +319,24 @@ describe('an answered question is grounded in the rows it describes', () => {
       sort: answer.query.sort,
     });
     expect(viaRouter.totalMatched).toBe(answer.counts.matched);
+  });
+
+  it('returns a briefing whose citations are retrieved parcels, not invented ones', async () => {
+    setNlqParserForTesting(
+      stubParser(draft({ locationMode: 'place', place: 'Lake Mary', minRoofAgeYears: 20 })),
+    );
+    const answer = await caller().nlq.ask({
+      question: 'houses near Lake Mary with roofs over 20 years old',
+    });
+    if (answer.status !== 'answered') throw new Error(`expected an answer, got ${answer.status}`);
+
+    expect(answer.answer.length).toBeGreaterThan(0);
+    expect(answer.citedParcelIds.length).toBeGreaterThan(0);
+    const retrieved = new Set(answer.evidence.map((card) => card.parcel_id));
+    for (const id of answer.citedParcelIds) expect(retrieved.has(id)).toBe(true);
+
+    const rows = await rowsFor(answer.query);
+    const admitted = new Set(rows.map((row) => row.parcel_id));
+    for (const card of answer.evidence) expect(admitted.has(card.parcel_id)).toBe(true);
   });
 });

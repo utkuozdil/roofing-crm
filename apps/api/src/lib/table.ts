@@ -55,6 +55,12 @@ function toLead(item: Record<string, unknown>): LeadRecord {
     ownerName: stored.ownerName ?? '',
     primaryAddress: stored.primaryAddress ?? '',
     roofAgeYears: stored.roofAgeYears ?? null,
+    latitude: typeof stored.latitude === 'number' ? stored.latitude : null,
+    longitude: typeof stored.longitude === 'number' ? stored.longitude : null,
+    permitCount: stored.permitCount ?? 0,
+    unresolvedPermitCount: stored.unresolvedPermitCount ?? 0,
+    unresolvedRoofingCount: stored.unresolvedRoofingCount ?? 0,
+    longestOpenYears: stored.longestOpenYears ?? null,
     source: stored.source ?? '',
     notes: stored.notes ?? '',
     createdAt: stored.createdAt ?? '',
@@ -93,6 +99,12 @@ export interface CreateLeadInput {
   ownerName: string;
   primaryAddress: string;
   roofAgeYears: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  permitCount?: number;
+  unresolvedPermitCount?: number;
+  unresolvedRoofingCount?: number;
+  longestOpenYears?: number | null;
   source: string;
   notes: string;
   status?: LeadStatus;
@@ -109,6 +121,12 @@ export async function createLead(input: CreateLeadInput): Promise<LeadRecord> {
     ownerName: input.ownerName,
     primaryAddress: input.primaryAddress,
     roofAgeYears: input.roofAgeYears,
+    latitude: input.latitude ?? null,
+    longitude: input.longitude ?? null,
+    permitCount: input.permitCount ?? 0,
+    unresolvedPermitCount: input.unresolvedPermitCount ?? 0,
+    unresolvedRoofingCount: input.unresolvedRoofingCount ?? 0,
+    longestOpenYears: input.longestOpenYears ?? null,
     source: input.source,
     notes: input.notes,
     createdAt,

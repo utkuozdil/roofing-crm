@@ -14,6 +14,7 @@ A map for a roofing sales team to find work in Seminole County, Florida.
 2. See nearby properties that look like leads — older roofs, open permits, or both.
 3. Open a property for owner, permits, contractor, and BBB rating (when we have one).
 4. Save it as a lead and manage it in the pipeline.
+5. Ask the RAG agent a question about roofing opportunities in the area.
 
 ## Features
 
@@ -21,9 +22,9 @@ A map for a roofing sales team to find work in Seminole County, Florida.
 | --- | --- |
 | Map & radius search | Set a centre and distance; browse pins and a candidate list side by side |
 | Lead filters | Narrow by roof age, permit status, and how long a permit has been open |
-| Ask in plain English | Type a question instead of filling the filters |
+| Ask the RAG agent | Type a question; see a briefing of retrieved properties, then the map and list match |
 | Property detail | See owner, value, permits, contractor, and BBB; save as a lead |
-| Lead pipeline | Update status, add notes, remove a lead |
+| Lead pipeline | Filter saved leads by roof age, permit, and radius; update status, add notes, remove a lead |
 | Coming later | Placeholders for the rest of a roofing CRM (not built) |
 
 ### Map & radius search
@@ -45,9 +46,18 @@ A map for a roofing sales team to find work in Seminole County, Florida.
 | Open duration | How many years a permit has been open |
 | More | Extra filters and sort order |
 
-### Ask in plain English
+### Ask the RAG agent
 
-Type a question. The map and list update to match.
+Type a question (or click an example). The agent:
+
+1. Turns the question into the same filters as the panel (place, roof age, open roofing, and so on).
+2. Retrieves the parcels that match — those rows are the only evidence it may use.
+3. Ranks them by meaning (permit wording, contractor, BBB) after the filters have already decided who is allowed.
+4. Writes a short briefing that names retrieved properties. It cannot invent a parcel.
+
+The map, filters, and candidate list move with the answer. Cited addresses appear under the briefing.
+
+The same question, on the same published snapshot, reuses the question embedding. A new county publish drops that cache so yesterday’s open permits are not ranked as today’s.
 
 Examples on the page:
 
@@ -73,6 +83,7 @@ Shown when you open one:
 
 A separate view for leads saved from the map:
 
+- Filter by roof age, permit status, how long a permit has been open, and distance from a city, ZIP, or pin
 - Update status
 - Add notes
 - Remove a lead

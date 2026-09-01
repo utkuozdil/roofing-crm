@@ -1,6 +1,7 @@
 import { LEAD_STATUSES } from '@roofing-crm/shared';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { enrichLead, enrichLeads } from '../leads/enrich';
 import {
   LeadNotFoundError,
   createLead,
@@ -20,6 +21,12 @@ const createInput = z.object({
   ownerName: z.string().min(1).max(200),
   primaryAddress: z.string().min(1).max(300),
   roofAgeYears: z.number().int().min(0).max(200).nullable().default(null),
+  latitude: z.number().min(-90).max(90).nullable().default(null),
+  longitude: z.number().min(-180).max(180).nullable().default(null),
+  permitCount: z.number().int().min(0).default(0),
+  unresolvedPermitCount: z.number().int().min(0).default(0),
+  unresolvedRoofingCount: z.number().int().min(0).default(0),
+  longestOpenYears: z.number().min(0).max(80).nullable().default(null),
   /** Why the property qualified. Defaulted so a one-click "create lead" is still valid. */
   source: z.string().max(200).default('Map radius search'),
   notes: z.string().max(2000).default(''),
@@ -49,12 +56,16 @@ export const leadsRouter = router({
   list: publicProcedure.input(listInput.optional()).query(async ({ input, ctx }) => {
     const limit = input?.limit ?? 50;
     ctx.logger.info('Listing leads', { limit });
-    return listLeads(limit);
+    const page = await listLeads(limit);
+    return { ...page, items: await enrichLeads(page.items) };
   }),
 
   get: publicProcedure
     .input(z.object({ leadId: z.string().min(1) }))
-    .query(async ({ input }) => getLead(input.leadId)),
+    .query(async ({ input }) => {
+      const lead = await getLead(input.leadId);
+      return lead ? enrichLead(lead) : null;
+    }),
 
   create: publicProcedure.input(createInput).mutation(async ({ input, ctx }) => {
     const lead = await createLead(input);

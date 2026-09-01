@@ -38,6 +38,9 @@ export const API_BASE_PATH = SERVICE_NAME;
  */
 export const NLQ_MODEL_ID = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
 
+/** Titan v2 ranks retrieved opportunity cards. Same InvokeModel grant family as the chat model. */
+export const RAG_EMBEDDING_MODEL_ID = 'amazon.titan-embed-text-v2:0';
+
 /**
  * The publisher's bucket, read for the parcel snapshot.
  *
@@ -81,6 +84,7 @@ export class ApiStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         NLQ_MODEL_ID,
+        RAG_EMBEDDING_MODEL_ID,
         DATA_BUCKET_NAME,
       },
     });
@@ -118,6 +122,7 @@ export class ApiStack extends cdk.Stack {
         resources: [
           `arn:aws:bedrock:*::foundation-model/${NLQ_MODEL_ID.replace(/^us\./, '')}`,
           `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/${NLQ_MODEL_ID}`,
+          `arn:aws:bedrock:*::foundation-model/${RAG_EMBEDDING_MODEL_ID}`,
         ],
       }),
     );

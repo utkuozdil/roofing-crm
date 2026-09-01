@@ -3,6 +3,7 @@ import {
   DEFAULT_RADIUS_MILES,
   SEMINOLE_COUNTY_CENTER,
   clampToCounty,
+  leadFilterFactsFromProperty,
   propertyDisplay,
   resolveLocationInput,
   type GeoPoint,
@@ -309,11 +310,13 @@ export function MapView({ leads }: MapViewProps) {
       // A lead's snapshot fields carry the resolved display label, so a lead created from an
       // unaddressed parcel is identifiable in the pipeline instead of arriving blank.
       const display = propertyDisplay(selectedProperty);
+      const facts = leadFilterFactsFromProperty(selectedProperty);
       await leads.create({
         parcelId: selectedProperty.parcel_id,
         ownerName: display.owner,
         primaryAddress: display.title,
         roofAgeYears: selectedProperty.roof_age_years,
+        ...facts,
         source,
         notes,
       });

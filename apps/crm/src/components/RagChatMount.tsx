@@ -22,6 +22,7 @@
 import {
   type GeoPoint,
   type PropertyFilters,
+  type RetrievedOpportunity,
   type SearchSort,
   NLQ_EXAMPLE_QUESTIONS,
   MAX_QUESTION_LENGTH,
@@ -47,11 +48,14 @@ interface Criterion {
 interface AnsweredState {
   kind: 'answered';
   question: string;
+  answer: string;
   summary: string;
   criteria: Criterion[];
   notes: string[];
   matched: number;
   inRadius: number;
+  evidence: RetrievedOpportunity[];
+  citedParcelIds: string[];
   query: NlqAppliedQuery;
 }
 
@@ -84,7 +88,7 @@ const STATUS_LABELS = {
   ready: 'Ready',
   disabled: 'Unavailable',
   unreachable: 'Unavailable',
-  asking: 'Translating…',
+  asking: 'Retrieving…',
 } as const;
 
 export function RagChatMount({
@@ -158,11 +162,14 @@ export function RagChatMount({
           setState({
             kind: 'answered',
             question: response.question,
+            answer: response.answer,
             summary: response.summary,
             criteria: [...response.criteria],
             notes: [...response.notes],
             matched: response.counts.matched,
             inRadius: response.counts.inRadius,
+            evidence: [...response.evidence],
+            citedParcelIds: [...response.citedParcelIds],
             query: response.query,
           });
           // The whole point: the question moves the app, it does not answer beside it.
@@ -203,7 +210,7 @@ export function RagChatMount({
       aria-labelledby="rag-heading"
     >
       <header className="rag-head">
-        <h2 id="rag-heading">Ask the agent</h2>
+        <h2 id="rag-heading">Ask the RAG agent</h2>
         <span
           className={`pill ${isEnabled ? 'pill--ok' : 'pill--warn'}${statusKind === 'ready' ? ' visually-hidden' : ''}`}
           data-testid="rag-status"
@@ -251,7 +258,7 @@ export function RagChatMount({
           disabled={!isEnabled || isAsking || question.trim() === ''}
           aria-disabled={!isEnabled || isAsking || question.trim() === ''}
         >
-          {isAsking ? 'Translating…' : 'Ask'}
+          {isAsking ? 'Retrieving…' : 'Ask'}
         </button>
       </form>
 
@@ -314,6 +321,41 @@ export function RagChatMount({
           data-years-since-sale={state.query.filters.minYearsSinceLastSale}
           data-sort={state.query.sort}
         >
+          <p className="rag-answer-text" data-testid="rag-answer">
+            {state.answer}
+          </p>
+
+          {state.citedParcelIds.length > 0 && (
+            <ol className="rag-citations" data-testid="rag-citations">
+              {state.citedParcelIds.map((parcelId) => {
+                const card = state.evidence.find((item) => item.parcel_id === parcelId);
+                if (!card) return null;
+                return (
+                  <li
+                    key={parcelId}
+                    data-testid="rag-citation"
+                    data-parcel-id={parcelId}
+                  >
+                    <span>{card.address}</span>
+                    {card.roof_age_years !== null && (
+                      <span className="muted"> · roof {card.roof_age_years}y</span>
+                    )}
+                    {card.unresolved_roofing > 0 && (
+                      <span className="muted"> · {card.unresolved_roofing} open roofing</span>
+                    )}
+                    {card.contractor_name && (
+                      <span className="muted">
+                        {' '}
+                        · {card.contractor_name}
+                        {card.bbb_rating ? ` BBB ${card.bbb_rating}` : ''}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+
           <p className="rag-summary" data-testid="rag-summary">
             {state.summary}
           </p>

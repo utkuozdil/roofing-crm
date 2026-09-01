@@ -837,6 +837,10 @@ button:focus-visible,
   background: rgba(249, 115, 22, 0.08);
 }
 
+.lead-filters {
+  margin-bottom: 1rem;
+}
+
 .lead-status {
   min-width: 9rem;
 }
@@ -1108,11 +1112,28 @@ button:focus-visible,
   background: var(--panel-2);
 }
 
+.rag-answer-text {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.rag-citations {
+  margin: 0.2rem 0 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
 .rag-summary {
   margin: 0;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   line-height: 1.5;
-  color: var(--text);
+  color: var(--muted, #9aa6bd);
 }
 
 .rag-criteria {

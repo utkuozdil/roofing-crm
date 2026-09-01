@@ -2,7 +2,7 @@ import { SERVICE_NAME } from '@roofing-crm/shared';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { ApiStack, DATA_BUCKET_NAME, NLQ_MODEL_ID } from './api-stack';
+import { ApiStack, DATA_BUCKET_NAME, NLQ_MODEL_ID, RAG_EMBEDDING_MODEL_ID } from './api-stack';
 import { CoreStack } from './core-stack';
 
 const env = { account: '795366345505', region: 'us-east-2' };
@@ -129,7 +129,7 @@ describe('the tRPC API', () => {
    */
   it('configures the natural-language model and grants invoke on it', () => {
     apiTemplate.hasResourceProperties('AWS::Lambda::Function', {
-      Environment: { Variables: Match.objectLike({ NLQ_MODEL_ID }) },
+      Environment: { Variables: Match.objectLike({ NLQ_MODEL_ID, RAG_EMBEDDING_MODEL_ID }) },
     });
 
     apiTemplate.hasResourceProperties('AWS::IAM::Policy', {
@@ -167,6 +167,7 @@ describe('the tRPC API', () => {
             Action: 'bedrock:InvokeModel',
             Resource: Match.arrayWith([
               'arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0',
+              `arn:aws:bedrock:*::foundation-model/${RAG_EMBEDDING_MODEL_ID}`,
             ]),
           }),
         ]),

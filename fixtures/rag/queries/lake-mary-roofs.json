@@ -1,0 +1,11 @@
+{
+  "id": "lake-mary-old-roofs",
+  "question": "Houses near Lake Mary with roofs over 20 years old",
+  "snapshotId": "fixture+none",
+  "expected": {
+    "intent": "property_search",
+    "place": "Lake Mary",
+    "minRoofAgeYears": 20,
+    "citedMustBeSubsetOfRetrieved": true
+  }
+}

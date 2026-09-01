@@ -1,15 +1,12 @@
 /**
  * Natural-language query endpoint.
  *
- * The contract is deliberately narrow: `ask` returns **a query, an interpretation, and a
- * count** — never rows. The SPA applies the returned query to the same state its own
- * controls write to, so the map, the filter inputs, and the results list all move together
- * and there is no second result set to drift out of agreement with the first.
+ * `ask` still returns a query, an interpretation, and a count so the SPA can apply the
+ * same state its own controls write. That is the auditable half.
  *
- * The count is still produced here, by running the grounded query through the very same
- * `PropertyDataSource.search` the SPA is about to call. That is what makes "34 matches"
- * auditable: it is the cardinality of the filter set, measured by the predicate the rows
- * will be measured by, not a number a model wrote down.
+ * The RAG half retrieves the parcels that search admitted, then writes a briefing from
+ * those cards only. The chat now shows relevant opportunities; it still does not own a
+ * second result set. Every cited parcel_id is a subset of the retrieved evidence.
  */
 
 import {
@@ -29,6 +26,18 @@ import { z } from 'zod';
 import { propertySource } from '../data/property-source';
 import { createNlqParser, type NlqParser } from '../nlq/parse';
 import { nlqModel, readNlqModelConfig, type NlqModelConfig } from '../nlq/model';
+import {
+  CachedEmbeddingIndex,
+  readRagEmbeddingConfig,
+  resolveEmbeddingService,
+} from '../rag/embeddings';
+import {
+  createRagGenerator,
+  fallbackRagGenerator,
+  generateRagBriefing,
+  type RagGenerator,
+} from '../rag/generate';
+import { retrieveRankedOpportunities, snapshotIdFromProvenance } from '../rag/retrieve';
 import { publicProcedure, router } from '../trpc';
 
 const geoPoint = z.object({
@@ -77,6 +86,43 @@ export function setNlqParserForTesting(parser: NlqParser | null): void {
   parserOverride = parser;
 }
 
+/**
+ * Tests stub the parser and must not pay for a second Bedrock call. The fallback generator
+ * still builds a briefing from retrieved cards, so the RAG shape is exercised.
+ */
+let generatorOverride: RagGenerator | null = null;
+
+export function setRagGeneratorForTesting(generator: RagGenerator | null): void {
+  generatorOverride = generator;
+}
+
+let embeddingIndexOverride: CachedEmbeddingIndex | null | undefined;
+
+export function setEmbeddingIndexForTesting(index: CachedEmbeddingIndex | null | undefined): void {
+  embeddingIndexOverride = index;
+}
+
+function resolveGenerator(): RagGenerator {
+  if (generatorOverride) return generatorOverride;
+  if (parserOverride) return fallbackRagGenerator();
+  const config = readNlqModelConfig();
+  if (!config) return fallbackRagGenerator();
+  return createRagGenerator({ model: nlqModel(config) });
+}
+
+let embeddingIndexCache: CachedEmbeddingIndex | null | undefined;
+
+function resolveEmbeddingIndex(): CachedEmbeddingIndex | null {
+  if (embeddingIndexOverride !== undefined) return embeddingIndexOverride;
+  if (parserOverride) return null;
+  if (embeddingIndexCache !== undefined) return embeddingIndexCache;
+  const resolved = resolveEmbeddingService();
+  embeddingIndexCache = resolved
+    ? new CachedEmbeddingIndex(resolved.embedder, resolved.modelId)
+    : null;
+  return embeddingIndexCache;
+}
+
 export const nlqRouter = router({
   /**
    * Asked before the operator types, so the panel can render a disabled state with worked
@@ -85,10 +131,12 @@ export const nlqRouter = router({
   config: publicProcedure.query(() => {
     const resolved = readNlqModelConfig();
     const { permitsAvailable } = propertySource;
+    const embedding = readRagEmbeddingConfig();
     return {
       enabled: resolved !== null,
       modelId: resolved?.modelId ?? null,
       region: resolved?.region ?? null,
+      embeddingModelId: embedding?.modelId ?? null,
       permitsAvailable,
       examples: nlqExampleQuestions(permitsAvailable),
       capabilities: nlqCapabilities(permitsAvailable),
@@ -199,6 +247,22 @@ export const nlqRouter = router({
     });
 
     const notes = [...query.notes, ...countNotes(query.criteria, result.totalMatched)];
+    const provenance = await propertySource.provenance();
+    const snapshotId = snapshotIdFromProvenance(provenance);
+    const embeddingIndex = resolveEmbeddingIndex();
+    embeddingIndex?.bind(snapshotId);
+
+    const retrieved = await retrieveRankedOpportunities({
+      items: result.items,
+      question: input.question,
+      index: embeddingIndex,
+    });
+    const briefing = await generateRagBriefing(resolveGenerator(), {
+      question: input.question,
+      matched: result.totalMatched,
+      centerLabel: query.centerLabel,
+      evidence: retrieved.evidence,
+    });
 
     ctx.logger.info('Natural-language query answered', {
       question: input.question,
@@ -207,6 +271,12 @@ export const nlqRouter = router({
       criteria: query.criteria.map((criterion) => criterion.key),
       totalMatched: result.totalMatched,
       totalInRadius: result.totalInRadius,
+      retrieved: retrieved.evidence.length,
+      cited: briefing.citedParcelIds.length,
+      ragBand: briefing.band,
+      retrievalMethod: retrieved.method,
+      snapshotId,
+      questionCacheHit: retrieved.questionCacheHit,
     });
 
     return {
@@ -223,6 +293,19 @@ export const nlqRouter = router({
       criteria: query.criteria,
       notes,
       summary: formatNlqSummary(query.criteria, result.totalMatched),
+      /** Retrieved-then-generated briefing. Citations are a subset of `evidence`. */
+      answer: briefing.answer,
+      evidence: briefing.evidence,
+      citedParcelIds: briefing.citedParcelIds,
+      retrieval: {
+        band: briefing.band,
+        method: retrieved.method,
+        snapshotId,
+        retrieved: retrieved.evidence.length,
+        cited: briefing.citedParcelIds.length,
+        questionCacheHit: retrieved.questionCacheHit,
+        documentCacheHits: retrieved.documentCacheHits,
+      },
       counts: {
         matched: result.totalMatched,
         inRadius: result.totalInRadius,

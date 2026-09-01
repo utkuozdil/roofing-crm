@@ -37,6 +37,12 @@ export interface CreateLeadArgs {
   ownerName: string;
   primaryAddress: string;
   roofAgeYears: number | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  permitCount?: number;
+  unresolvedPermitCount?: number;
+  unresolvedRoofingCount?: number;
+  longestOpenYears?: number | null;
   source: string;
   notes: string;
 }
@@ -90,7 +96,13 @@ export function useLeads() {
       markSaveState(leadId, 'saving');
       try {
         const updated = await api.leads.updateStatus.mutate({ leadId, status });
-        setLeads((current) => current.map((lead) => (lead.leadId === leadId ? updated : lead)));
+        setLeads((current) =>
+          current.map((lead) =>
+            lead.leadId === leadId
+              ? { ...lead, status: updated.status, updatedAt: updated.updatedAt }
+              : lead,
+          ),
+        );
         markSaveState(leadId, 'saved');
         setError(null);
       } catch (caught) {
