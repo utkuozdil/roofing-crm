@@ -1,0 +1,4 @@
+{
+  "extends": "@roofing-crm/tsconfig/base.json",
+  "include": ["src/**/*.ts"]
+}

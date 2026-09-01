@@ -1,0 +1,4 @@
+{
+  "extends": "@roofing-crm/tsconfig/node.json",
+  "include": ["src/**/*.ts", "cdk/**/*.ts"]
+}
