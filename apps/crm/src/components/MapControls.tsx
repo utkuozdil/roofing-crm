@@ -3,10 +3,11 @@ import type { PanDirection } from './SearchPanel';
 export interface MapControlsProps {
   onPan: (direction: PanDirection) => void;
   onZoom: (delta: number) => void;
-  zoomOffset: number;
+  canZoomIn: boolean;
+  canZoomOut: boolean;
 }
 
-export function MapControls({ onPan, onZoom, zoomOffset }: MapControlsProps) {
+export function MapControls({ onPan, onZoom, canZoomIn, canZoomOut }: MapControlsProps) {
   return (
     <div className="map-controls" role="group" aria-label="Pan and zoom the map">
       <button className="button button--icon" type="button" data-testid="map-pan-north" onClick={() => onPan('north')}>
@@ -26,7 +27,7 @@ export function MapControls({ onPan, onZoom, zoomOffset }: MapControlsProps) {
         type="button"
         data-testid="map-zoom-in"
         onClick={() => onZoom(1)}
-        disabled={zoomOffset >= 3}
+        disabled={!canZoomIn}
       >
         +
       </button>
@@ -35,7 +36,7 @@ export function MapControls({ onPan, onZoom, zoomOffset }: MapControlsProps) {
         type="button"
         data-testid="map-zoom-out"
         onClick={() => onZoom(-1)}
-        disabled={zoomOffset <= -3}
+        disabled={!canZoomOut}
       >
         −
       </button>

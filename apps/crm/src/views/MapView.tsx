@@ -13,7 +13,13 @@ import {
 } from '@roofing-crm/shared';
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { api } from '../api';
-import { MapCanvas } from '../components/MapCanvas';
+import {
+  MAP_MAX_ZOOM,
+  MAP_MIN_ZOOM,
+  MapCanvas,
+  mapBaseZoom,
+  mapZoomForRadius,
+} from '../components/MapCanvas';
 import { MapControls } from '../components/MapControls';
 import { PropertyDetailPanel } from '../components/PropertyDetailPanel';
 import { RagChatMount, type NlqAppliedQuery } from '../components/RagChatMount';
@@ -95,6 +101,7 @@ export function MapView({ leads }: MapViewProps) {
    * one refused search; getting it wrong the other way looks like a broken control.
    */
   const [permitsAvailable, setPermitsAvailable] = useState(true);
+  const [datasetRows, setDatasetRows] = useState<number | null>(null);
 
   const [selectedParcelId, setSelectedParcelId] = useState<string | null>(null);
   const [fetchedProperty, setFetchedProperty] = useState<PropertyDetail | null>(null);
@@ -147,7 +154,10 @@ export function MapView({ leads }: MapViewProps) {
     // surfacing on the map: the Status view reports the dataset, and the filters stay enabled.
     api.properties.dataset
       .query()
-      .then((dataset) => setPermitsAvailable(dataset.permitsAvailable))
+      .then((dataset) => {
+        setPermitsAvailable(dataset.permitsAvailable);
+        setDatasetRows(dataset.rowCount);
+      })
       .catch(() => undefined);
   }, []);
 
@@ -258,6 +268,22 @@ export function MapView({ leads }: MapViewProps) {
     setSort(query.sort);
   }, []);
 
+  const handleZoom = useCallback(
+    (delta: number) => {
+      setZoomOffset((current) => {
+        const base = mapBaseZoom(center.latitude, radiusMiles);
+        const nextZoom = Math.min(
+          MAP_MAX_ZOOM,
+          Math.max(MAP_MIN_ZOOM, base + current + delta),
+        );
+        return nextZoom - base;
+      });
+    },
+    [center.latitude, radiusMiles],
+  );
+
+  const mapZoom = mapZoomForRadius(center.latitude, radiusMiles, zoomOffset);
+
   const handlePan = useCallback(
     (direction: PanDirection) => {
       const latitudeStep = (radiusMiles * PAN_FRACTION) / MILES_PER_DEGREE_LAT;
@@ -301,24 +327,23 @@ export function MapView({ leads }: MapViewProps) {
 
   return (
     <div className="map-view">
-      <div className="map-top">
-        <header className="content-head">
-          <div>
-            <h1>Find leads</h1>
-            <p>Seminole County, FL</p>
-          </div>
-          <p className="visually-hidden" data-testid="search-diagnostics">
-            {result.cellsScanned} geohash-5 cells · {result.candidatesScanned} candidates measured
-          </p>
-        </header>
-        <RagChatMount
-          center={center}
-          radiusMiles={radiusMiles}
-          filters={filters}
-          resultCount={result.totalMatched}
-          onApplyQuery={handleApplyNlqQuery}
-        />
-      </div>
+      <header className="content-head">
+        <div>
+          <h1>Find leads</h1>
+          <p>Seminole County, FL</p>
+          {datasetRows !== null && (
+            <p className="note" data-testid="dataset-strip">
+              {datasetRows.toLocaleString('en-US')} parcels
+              {permitsAvailable
+                ? ' · permit history loaded'
+                : ' · parcels only, no permit history yet'}
+            </p>
+          )}
+        </div>
+        <p className="visually-hidden" data-testid="search-diagnostics">
+          {result.cellsScanned} geohash-5 cells · {result.candidatesScanned} candidates measured
+        </p>
+      </header>
 
       <SearchPanel
           locationText={locationText}
@@ -347,6 +372,14 @@ export function MapView({ leads }: MapViewProps) {
           isSearching={isSearching}
         />
 
+      <RagChatMount
+        center={center}
+        radiusMiles={radiusMiles}
+        filters={filters}
+        resultCount={result.totalMatched}
+        onApplyQuery={handleApplyNlqQuery}
+      />
+
       <div className="map-workspace">
         <div className="map-column">
           <div
@@ -368,11 +401,13 @@ export function MapView({ leads }: MapViewProps) {
                 moveCenter(clamped, 'Dropped pin');
               }}
               onSelectProperty={setSelectedParcelId}
+              onZoom={handleZoom}
             />
             <MapControls
               onPan={handlePan}
-              onZoom={(delta) => setZoomOffset((current) => Math.min(3, Math.max(-3, current + delta)))}
-              zoomOffset={zoomOffset}
+              onZoom={handleZoom}
+              canZoomIn={mapZoom < MAP_MAX_ZOOM}
+              canZoomOut={mapZoom > MAP_MIN_ZOOM}
             />
           </div>
           <button

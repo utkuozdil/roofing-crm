@@ -57,7 +57,7 @@ export function App() {
         </nav>
 
         <p className="sidebar-foot">
-          Seminole County, FL · 181,218 parcels from the published county roll
+          Seminole County, FL · published county roll
         </p>
       </aside>
 

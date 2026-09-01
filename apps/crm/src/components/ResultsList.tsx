@@ -141,7 +141,7 @@ export function ResultsList({
           </button>
         )}
         <p
-          className="visually-hidden"
+          className="results-summary"
           data-testid="result-count"
           data-searching={isSearching ? 'true' : 'false'}
           data-radius-miles={applied?.radiusMiles}
@@ -164,7 +164,7 @@ export function ResultsList({
 
         {!isSearching && applied && roofAgeThresholdActive && unknownRoofAgeInRadius > 0 && (
           <p
-            className="visually-hidden"
+            className="note"
             data-testid="unknown-roof-age-note"
             data-unknown-roof-age-count={unknownRoofAgeInRadius}
           >
@@ -176,7 +176,7 @@ export function ResultsList({
 
         {!isSearching && applied && permitFilterActive && permitCoverage !== null && (
           <p
-            className="visually-hidden"
+            className="note"
             data-testid="permit-coverage-note"
             data-without-permits={permitCoverage.withoutPermitsInRadius}
             data-unknown-permit-status={permitCoverage.unknownPermitStatusInRadius}

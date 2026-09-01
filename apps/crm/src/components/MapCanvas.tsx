@@ -5,7 +5,7 @@ import {
   type GeoPoint,
   type PropertySearchItem,
 } from '@roofing-crm/shared';
-import { useMemo, type MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, type MouseEvent } from 'react';
 import { formatMiles } from '../format';
 
 /**
@@ -30,8 +30,8 @@ const VIEW_WIDTH = 720;
 const VIEW_HEIGHT = 460;
 
 const TILE_SIZE = 256;
-const MIN_ZOOM = 9;
-const MAX_ZOOM = 17;
+export const MAP_MIN_ZOOM = 9;
+export const MAP_MAX_ZOOM = 17;
 
 /** Circumference of the Earth in metres at the equator, per Web Mercator convention. */
 const EQUATOR_METRES_PER_PIXEL_AT_ZOOM_0 = 156_543.033_92;
@@ -69,14 +69,19 @@ function milesPerPixel(latitude: number, zoom: number): number {
   );
 }
 
-/** Picks the zoom at which the search circle fills most of the viewport height. */
-function zoomForRadius(latitude: number, radiusMiles: number, offset: number): number {
+/** Integer zoom that fits the search circle, before the operator's +/− offset. */
+export function mapBaseZoom(latitude: number, radiusMiles: number): number {
   const targetDiameterPixels = VIEW_HEIGHT * 0.72;
   const wanted = (2 * radiusMiles) / targetDiameterPixels;
   const raw = Math.log2(
     (EQUATOR_METRES_PER_PIXEL_AT_ZOOM_0 * Math.cos(toRadians(latitude))) / METRES_PER_MILE / wanted,
   );
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.floor(raw) + offset));
+  return Math.min(MAP_MAX_ZOOM, Math.max(MAP_MIN_ZOOM, Math.floor(raw)));
+}
+
+/** Picks the zoom at which the search circle fills most of the viewport height. */
+export function mapZoomForRadius(latitude: number, radiusMiles: number, offset: number): number {
+  return Math.min(MAP_MAX_ZOOM, Math.max(MAP_MIN_ZOOM, mapBaseZoom(latitude, radiusMiles) + offset));
 }
 
 interface Tile {
@@ -118,6 +123,8 @@ export interface MapCanvasProps {
   showBasemap: boolean;
   onPickPoint: (point: GeoPoint) => void;
   onSelectProperty: (parcelId: string) => void;
+  /** Extra way to zoom. The +/− buttons remain the reachable, non-gesture control. */
+  onZoom?: (delta: number) => void;
 }
 
 export function MapCanvas({
@@ -129,8 +136,21 @@ export function MapCanvas({
   showBasemap,
   onPickPoint,
   onSelectProperty,
+  onZoom,
 }: MapCanvasProps) {
-  const zoom = zoomForRadius(center.latitude, radiusMiles, zoomOffset);
+  const zoom = mapZoomForRadius(center.latitude, radiusMiles, zoomOffset);
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const node = frameRef.current;
+    if (!node || !onZoom) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      onZoom(event.deltaY < 0 ? 1 : -1);
+    };
+    node.addEventListener('wheel', onWheel, { passive: false });
+    return () => node.removeEventListener('wheel', onWheel);
+  }, [onZoom]);
 
   const layout = useMemo(() => {
     const centreWorld = project(center, zoom);
@@ -188,7 +208,7 @@ export function MapCanvas({
   const centreScreen = layout.toScreen(center);
 
   return (
-    <div className="map-frame">
+    <div className="map-frame" ref={frameRef}>
       <svg
         className="map-svg"
         viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
@@ -294,7 +314,7 @@ export function MapCanvas({
       </svg>
 
       <p className="map-hint" data-testid="map-hint">
-        Click the map to drop a pin.
+        Orange circle is the search radius. Click the map to drop a pin.
       </p>
     </div>
   );

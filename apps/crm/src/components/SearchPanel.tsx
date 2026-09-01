@@ -196,7 +196,7 @@ export function SearchPanel(props: SearchPanelProps) {
         <div className="field-pair">
           <label className="field" htmlFor="radius-slider">
             <span>
-              <strong data-testid="radius-value">{radiusMiles}</strong> miles
+              Radius <strong data-testid="radius-value">{radiusMiles}</strong> miles
             </span>
             <input
               id="radius-slider"
@@ -278,28 +278,30 @@ export function SearchPanel(props: SearchPanelProps) {
         */}
         <div className="search-bar-block">
         <div className="field-pair">
-          <label className="field" htmlFor="permit-status-select">
-            <span>Permit status</span>
-            <select
-              id="permit-status-select"
-              data-testid="permit-status-select"
-              name="permitStatus"
-              value={filters.permitStatus}
+          <label className="field" htmlFor="permit-open-years-slider">
+            <span>
+              Open at least{' '}
+              <strong data-testid="permit-open-years-value">{filters.minPermitOpenYears}</strong>{' '}
+              years
+            </span>
+            <input
+              id="permit-open-years-slider"
+              data-testid="permit-open-years-slider"
+              name="permitOpenYearsSlider"
+              type="range"
+              min={0}
+              max={40}
+              step={1}
+              value={filters.minPermitOpenYears}
               disabled={!permitsAvailable}
               title={permitsAvailable ? undefined : PERMITS_UNAVAILABLE_HINT}
               onChange={(event) =>
-                onFiltersChange({ permitStatus: event.target.value as PermitFilterMode })
+                onFiltersChange({ minPermitOpenYears: Number(event.target.value) })
               }
-            >
-              {PERMIT_FILTER_MODES.map((mode) => (
-                <option key={mode} value={mode}>
-                  {PERMIT_MODE_LABELS[mode]}
-                </option>
-              ))}
-            </select>
+            />
           </label>
           <label className="field field--narrow" htmlFor="permit-open-years-input">
-            <span>Open ≥ years</span>
+            <span>Years</span>
             <input
               id="permit-open-years-input"
               data-testid="permit-open-years-input"
@@ -322,6 +324,29 @@ export function SearchPanel(props: SearchPanelProps) {
             />
           </label>
         </div>
+        </div>
+
+        <div className="search-bar-block">
+          <label className="field" htmlFor="permit-status-select">
+            <span>Permit status</span>
+            <select
+              id="permit-status-select"
+              data-testid="permit-status-select"
+              name="permitStatus"
+              value={filters.permitStatus}
+              disabled={!permitsAvailable}
+              title={permitsAvailable ? undefined : PERMITS_UNAVAILABLE_HINT}
+              onChange={(event) =>
+                onFiltersChange({ permitStatus: event.target.value as PermitFilterMode })
+              }
+            >
+              {PERMIT_FILTER_MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {PERMIT_MODE_LABELS[mode]}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </div>
 

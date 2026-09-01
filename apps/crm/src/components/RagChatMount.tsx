@@ -197,7 +197,7 @@ export function RagChatMount({
 
   return (
     <section
-      className="panel rag-panel rag-panel--compact"
+      className="panel rag-panel rag-panel--bar"
       data-testid="rag-chat-mount"
       data-enabled={isEnabled ? 'true' : 'false'}
       aria-labelledby="rag-heading"
@@ -260,7 +260,7 @@ export function RagChatMount({
         than being a hint that disappears when the feature is off.
       */}
       <div className="rag-examples">
-        <p className="visually-hidden" id="rag-examples-heading">
+        <p className="rag-examples-heading" id="rag-examples-heading">
           Example questions
         </p>
         <ul data-testid="rag-examples">
