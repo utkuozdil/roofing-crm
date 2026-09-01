@@ -2,7 +2,7 @@ import { SERVICE_NAME } from '@roofing-crm/shared';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { ApiStack } from './api-stack';
+import { ApiStack, NLQ_MODEL_ID } from './api-stack';
 import { CoreStack } from './core-stack';
 
 const env = { account: '795366345505', region: 'us-east-2' };
@@ -11,13 +11,18 @@ const tags = { project_name: SERVICE_NAME, environment: 'dev' };
 let coreTemplate: Template;
 let apiTemplate: Template;
 
+/**
+ * Synthesis bundles both Lambdas with esbuild. That is ~200ms warm but well over Vitest's
+ * default 10s hook budget on a cold esbuild cache, so the timeout is raised to keep a clean
+ * checkout from failing the suite for a reason that has nothing to do with the templates.
+ */
 beforeAll(() => {
   const app = new cdk.App();
   const core = new CoreStack(app, 'TestCore', { env, tags, targetEnv: 'dev' });
   const api = new ApiStack(app, 'TestApi', { env, tags, targetEnv: 'dev', table: core.table });
   coreTemplate = Template.fromStack(core);
   apiTemplate = Template.fromStack(api);
-});
+}, 120_000);
 
 describe('every Lambda carries the observability contract', () => {
   it('enables X-Ray active tracing and source maps', () => {
@@ -115,5 +120,33 @@ describe('the tRPC API', () => {
     apiTemplate.hasResourceProperties('AWS::ApiGatewayV2::Route', {
       RouteKey: 'ANY /trpc/{proxy+}',
     });
+  });
+
+  /**
+   * The natural-language panel renders a disabled state when no model is configured, so a
+   * deploy that forgot this variable would look like a working site with a dead feature
+   * rather than like a failure.
+   */
+  it('configures the natural-language model and grants invoke on it', () => {
+    apiTemplate.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: Match.objectLike({ NLQ_MODEL_ID }) },
+    });
+
+    apiTemplate.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'bedrock:InvokeModel',
+            Resource: Match.arrayWith([Match.stringLikeRegexp('foundation-model')]),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  /** No key means no key to leak: authentication is the execution role, not an env var. */
+  it('holds no model API key in the template', () => {
+    const rendered = JSON.stringify(apiTemplate.toJSON());
+    expect(rendered).not.toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY|AWS_BEARER_TOKEN_BEDROCK/);
   });
 });

@@ -1,4 +1,4 @@
-import { SERVICE_NAME, parseTargetEnv } from '@roofing-crm/shared';
+import { SERVICE_NAME, SERVICE_PHASE, parseTargetEnv } from '@roofing-crm/shared';
 import * as cdk from 'aws-cdk-lib';
 import { ApiStack } from '../lib/api-stack';
 import { CoreStack } from '../lib/core-stack';
@@ -20,7 +20,7 @@ const tags: Record<string, string> = {
   project_name: SERVICE_NAME,
   environment: targetEnv,
   managed_by: 'cdk',
-  phase: 'phase-0',
+  phase: SERVICE_PHASE,
 };
 
 const core = new CoreStack(app, `${stackPrefix}-Core`, {

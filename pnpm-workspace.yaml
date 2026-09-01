@@ -1,6 +1,7 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+  - 'e2e'
 
 # esbuild ships a platform binary via a postinstall script; NodejsFunction bundling
 # needs it. Every other dependency stays script-free.

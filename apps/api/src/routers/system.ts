@@ -1,4 +1,4 @@
-import { AWS_REGION, SERVICE_NAME } from '@roofing-crm/shared';
+import { AWS_REGION, SERVICE_NAME, SERVICE_PHASE } from '@roofing-crm/shared';
 import { z } from 'zod';
 import { probeTable } from '../lib/table';
 import { publicProcedure, router } from '../trpc';
@@ -9,7 +9,7 @@ export const systemRouter = router({
     status: 'ok' as const,
     service: SERVICE_NAME,
     region: AWS_REGION,
-    phase: 'phase-0' as const,
+    phase: SERVICE_PHASE,
     checkedAt: new Date().toISOString(),
   })),
 

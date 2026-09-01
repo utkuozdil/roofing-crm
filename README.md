@@ -1,12 +1,13 @@
 # Roofing CRM & Lead Identification UI
 
-## Phase 0 — infrastructure scaffolding
-
-Phase 0 provisions the deployment surface and the observability contract. There is **no
-business logic yet**: the map, radius search, lead scoring, and RAG agent all arrive in
-later phases. The Phase 0 exit criterion is a publicly reachable HTTPS URL.
+## Phase 6 — the map-based CRM
 
 **Live URL:** https://d3jfjqgra0c58a.cloudfront.net
+
+The map, radius search, lead filters, property detail, and lead CRUD are all implemented
+and live. The RAG agent is mounted but not wired, and the property dataset is a seeded
+fixture standing in for the ingestion pipeline — both are called out in
+[Stubbed](#what-is-stubbed).
 
 The CloudFront distribution serves both the SPA and the API from one origin, so the
 browser never makes a cross-origin call and there is no API URL to inject at build time:
@@ -19,15 +20,111 @@ browser never makes a cross-origin call and there is no API URL to inject at bui
 ### Layout
 
 ```
-apps/crm             Vite + React SPA
-apps/api             tRPC router, Lambda handlers, and the CDK app
+apps/crm             Vite + React SPA — map, filters, detail panel, lead pipeline
+apps/api             tRPC router, property data source, Lambda handlers, and the CDK app
+e2e                  Playwright suite that drives the deployed UI headlessly
 packages/api-client  AppRouter type + preconfigured httpBatchLink client
-packages/shared      service identity, metric names, DynamoDB key builders
+packages/shared      property/permit/lead contract, geo maths, county gazetteer, table keys
 packages/tsconfig    base / react / node compiler presets
 ```
 
 `packages/shared` owns the single-table key patterns, so a key can never drift between
-the Lambda that writes it and the CDK that provisions the table.
+the Lambda that writes it and the CDK that provisions the table. It also owns the
+property record contract, so the API, the fixture data source, and the UI cannot disagree
+about a field name.
+
+### Designed for a headless driver
+
+The single hardest constraint on this UI is that it is evaluated by a headless browser,
+which cannot reliably drag a map. So **no capability in this product is gesture-only**:
+
+| Capability    | Map interaction   | Equivalent DOM control                                 |
+| ------------- | ----------------- | ------------------------------------------------------ |
+| Search centre | Click to drop pin | Text input accepting address, city, ZIP, or `lat,lon`  |
+| Search centre | —                 | "Use my location" button (degrades when denied)        |
+| Radius        | —                 | `<input type="range">` **and** `<input type="number">` |
+| Pan / zoom    | —                 | Six buttons                                            |
+| Open property | Click a pin       | Address button in the candidate table                  |
+
+The map itself is a single SVG over static raster tiles rather than a mapping library.
+Tiles are plain `<image>` elements, so an unreachable or blocked tile host leaves the
+county outline, radius circle, and every result pin rendering normally. Result pins are
+focusable `role="button"` circles with accessible names.
+
+Interactive elements carry stable `data-testid` attributes. The results panel also
+publishes the query its rows answer (`data-radius-miles`, `data-roof-age`,
+`data-permit-status`, `data-searching`), because search is debounced and "no spinner" is
+not proof a filter has taken effect.
+
+### Radius search
+
+Two-phase, implemented this way over fixtures because it is how it must work over real
+data:
+
+1. Compute every geohash-5 cell that can contain a point inside the radius and read only
+   those buckets. The candidate set is bounded by area, not by dataset size.
+2. Measure exact haversine distance on the candidates, discarding the bounding-box
+   corners that fall outside the true circle.
+
+A test asserts phase one agrees exactly with a brute-force sweep of the whole dataset at
+five radii, because a prefix phase that dropped an in-radius point would silently hide
+leads. The UI surfaces the cell and candidate counts per query.
+
+### Roof age derivation
+
+A signed-off roofing permit resets the roof clock; otherwise the roof is assumed original
+to the structure. Two statuses deliberately do not reset it: an **unresolved** permit,
+because the work was never certified complete — which is exactly the lead signal — and a
+**voided** permit, because the work never happened.
+
+The source has no explicit close date; a permit's resolution date is its terminal
+inspection's Result Date. So `closed_date` can be absent even on resolved work, and
+`permitDuration` reports that as `unrecorded` rather than a zero-day turnaround the county
+never recorded.
+
+### Missing data, and what the filters do about it
+
+Field nullability is taken from measurements against the 181,218 ingested parcels rather
+than guessed, and the fixture generator reproduces those rates
+(`MEASURED_MISSING_RATES`) so the UI is exercised against the county's real sparsity.
+Coordinates and the three valuation fields are always present; the gaps that matter:
+
+| Gap                                          | Rate  | Treatment                                                                                            |
+| -------------------------------------------- | ----- | ---------------------------------------------------------------------------------------------------- |
+| `primary_address`                            | 9.1%  | Titled `Parcel <id>` with the nearest municipality derived from its coordinates. Never filtered out. |
+| `year_built`, and therefore `roof_age_years` | 10.6% | **Excluded by default** when a roof-age threshold is set. See below.                                 |
+| `owner_name`                                 | 0.8%  | Rendered as "Owner not on record".                                                                   |
+
+**The unknown-roof-age decision is explicit.** A roofing crew asking for roofs older than
+15 years is asking for roofs, and a parcel with no building does not qualify — so
+`includeUnknownRoofAge` defaults to `false`. Because that silently removes a tenth of the
+county, the exclusion is not left implicit: the results header states how many in-radius
+parcels were dropped and why, the "Include unknown roof age" checkbox reverses it, and the
+detail panel explains per-parcel why a roof age could not be derived.
+
+### Roofing permit classification
+
+`is_roofing` is derived rather than waiting on the permit harvest, using the county's own
+vocabulary from the Oracle repo's `docs/seminole-sources.yaml` (read, never modified):
+
+- The nine roofing application-type codes out of 109 (`R100`, `EZRO`, `C110`, `C202`,
+  `R200`, `R300`, `A998`, `C998`, `R800`), matched first.
+- The `PermitType` column, which is a separate vocabulary (`RR`, `BPRF`).
+- A narrow label match as a last resort, looking for roof _replacement_ wording so a roof
+  deck or roof-mounted mechanical permit is not misread as reroofing.
+
+Every classification reports `matched_on`, so a surprising result is auditable. The
+vocabulary drifts over time — `EZRO` returned 211 rows for 2022-10 and none for 2026-08 —
+so all nine codes classify regardless of whether they are currently in use.
+
+Permit status maps to the county's seven observed values; anything outside them is
+quarantined as `unknown` rather than bucketed, matching the source's `_unmapped:
+alert_and_quarantine` rule. An application number is **not** unique — the natural key is
+`(AppNo, StructureSequence, PermitTypeSequence)`, which `permitNaturalKey` builds.
+
+`packages/shared/src/geo.test.ts` pins the ten coordinates on which this TypeScript
+`encodeGeohash` was verified to agree exactly with the pipeline's Python encoder, so a
+change to either that would make the prefix pass skip partitions fails a test.
 
 ### Stacks
 
@@ -48,10 +145,16 @@ just format      # prettier --check
 just lint        # eslint
 just type-check  # tsc --noEmit across the workspace
 just test        # vitest (unit + CDK assertions)
+just e2e-setup   # download the Chromium the e2e suite drives
+just e2e         # Playwright against the deployed URL (override E2E_BASE_URL)
 just build       # vite build, then cdk synth --strict
 just deploy      # build, then cdk deploy --all
 just destroy     # tear the environment down
 ```
+
+`just test` is unit and CDK assertions only — it never launches a browser or touches AWS.
+`just e2e` runs against a deployed URL on purpose: what needs proving is that CloudFront
+and its tRPC origin work together, which a local dev server would not exercise.
 
 ### Observability contract
 
@@ -120,11 +223,7 @@ The UI should present property and permit details, including contractor informat
 
 ---
 
-# Phase 0 — Deployed Infrastructure
-
-Phase 0 stands up the deployment substrate the acceptance criteria will be built on, and
-proves the full request path works end to end against real AWS. None of the lead-identification
-features above are implemented yet — see [Deferred](#deferred-to-later-phases).
+# Deployed environment
 
 ## Live environment (`dev`, account `795366345505`, `us-east-2`)
 
@@ -161,8 +260,18 @@ Three stacks, deployed in dependency order:
 | ---- | --------------- | ------ | ------ | ------------- |
 | Lead | `LEAD#<leadId>` | `META` | `LEAD` | `<createdAt>` |
 
-`GSI1` gives newest-first lead listing. Phase 0 ships the table and the read path only;
-lead writes arrive with the CRM record feature.
+`GSI1` gives newest-first lead listing. Create, read, update, and delete all go through
+this one partition.
+
+Both mutating paths (`updateLead`, `deleteLead`) are guarded on `attribute_exists(PK)`. A
+bare `UpdateItem` creates the item when it is missing, so without the guard "update a
+lead that was just deleted" would silently resurrect it as a keys-only ghost row; with it,
+the API returns a real `NOT_FOUND`.
+
+Lead mutations are **not** applied optimistically in the UI. An optimistic row looks
+committed the instant it is clicked, which hides in-flight work — a reload landing on a
+pending request discards it with no way to tell a saved change from a lost one. Instead
+each row shows its own save state and the table only ever displays what the API confirmed.
 
 ### Observability
 
@@ -214,14 +323,31 @@ The SPA must be built before synth because `WebStack` reads `apps/crm/dist` as a
 synth time; `just build` and `just deploy` both handle that ordering. Creating the
 CloudFront distribution from cold takes roughly 30 minutes.
 
-## Deferred to later phases
+## What is stubbed
 
-Phase 0 is infrastructure only. Not yet implemented:
+Two things are deliberately not real, and the UI says so on screen rather than only here.
 
-- Map, radius search, GPS/pin-drop centring, and the aged-roof and open-permit filters.
-- Permit, contractor, and BBB detail views.
-- Lead CRUD — the table and its GSI read path exist, but no write or qualification logic.
-- The RAG-backed natural-language agent.
+**The property dataset.** The Oracle ingestion pipeline that produces real Seminole County
+parcels, permits, and BBB enrichment is a concurrent deliverable and was not available.
+Rather than block on it or invent an API that does not exist, the record contract lives in
+`packages/shared` as the single source of truth, and a seeded 360-row fixture dataset sits
+behind a `PropertyDataSource` interface in `apps/api/src/data/`. Generation is deterministic
+from a fixed seed, so a given parcel id always carries the same owner, permits, and
+coordinates. Replacing it is one constructor call in `property-source.ts`; no UI change.
+The Platform status view and the API's `properties.dataset` procedure both report
+`provider: fixture` so synthetic rows are never presented as county records.
+
+Two things about the fixture are now measured rather than invented: field nullability
+matches the real ingested rates, and permit codes and statuses come from the county's
+published vocabulary. No permits are ingested yet, so permit _rows_ remain synthetic even
+though the codes they carry are real.
+
+**The RAG agent.** `RagChatMount` is the seam the retrieval engine attaches to — a laid-out
+panel with the controls it needs, held disabled and labelled "Not yet wired", showing the
+live centre, radius, and filter set it will be handed. No LLM layer is built.
+
+Also not implemented:
+
 - Authentication. Both the API and the CRM are currently public.
 - A custom domain. `ApiStack` carries a shared-account domain map, but this standalone
   account has no hosted zone, so CloudFront supplies the stable public hostname instead.

@@ -1,0 +1,16 @@
+{
+  "name": "@roofing-crm/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.1",
+    "@roofing-crm/tsconfig": "workspace:*",
+    "@types/node": "^26.4.0",
+    "typescript": "^6.0.3"
+  }
+}

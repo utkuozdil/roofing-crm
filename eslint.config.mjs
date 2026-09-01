@@ -10,6 +10,8 @@ export default tseslint.config(
       '**/cdk.out/**',
       '**/coverage/**',
       '**/.turbo/**',
+      '**/playwright-report/**',
+      '**/test-results/**',
     ],
   },
   js.configs.recommended,

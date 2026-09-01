@@ -16,6 +16,13 @@ export const METRICS_NAMESPACE = 'RoofingCrm';
 
 export const AWS_REGION = 'us-east-2';
 
+/**
+ * Delivery phase of the deployed build. Surfaced by the API health probe and used as the
+ * `phase` cost-allocation tag, so a CloudFront response and a billing line item can be
+ * traced back to the same increment.
+ */
+export const SERVICE_PHASE = 'phase-6';
+
 export type TargetEnv = 'dev' | 'prod';
 
 export function parseTargetEnv(value: string | undefined): TargetEnv {

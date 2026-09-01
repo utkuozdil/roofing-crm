@@ -4,3 +4,5 @@ cdk.out/
 coverage/
 pnpm-lock.yaml
 .turbo/
+playwright-report/
+test-results/

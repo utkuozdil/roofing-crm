@@ -30,6 +30,14 @@ type-check:
 test:
     pnpm turbo run test
 
+# Install the browser the end-to-end suite drives
+e2e-setup:
+    cd e2e && pnpm exec playwright install chromium
+
+# Drive the deployed UI headlessly. Override E2E_BASE_URL to target another deployment.
+e2e:
+    cd e2e && pnpm exec playwright test
+
 # Build the SPA, then synthesize every CDK stack
 build:
     pnpm turbo run build

@@ -1,0 +1,5 @@
+{
+  "extends": "@roofing-crm/tsconfig/node.json",
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "playwright-report", "test-results"]
+}
