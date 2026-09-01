@@ -21,6 +21,21 @@ export interface ObservableFunctionProps {
 }
 
 /**
+ * Physical log-group name for a function, derived from its position in the construct
+ * tree rather than its id alone.
+ *
+ * The wrapper constructs name their inner function `Function`, so an id-only name would
+ * collide as soon as there are two of them. The stack-relative path is unique by
+ * construction.
+ */
+function logGroupNameFor(scope: Construct, id: string, props: ObservableFunctionProps): string {
+  const stackPath = cdk.Stack.of(scope).node.path;
+  const relative = scope.node.path.slice(stackPath.length).replace(/^\//, '');
+  const suffix = [relative, id].filter(Boolean).join('/').replace(/\//g, '-');
+  return `/aws/lambda/${props.serviceName}-${props.targetEnv}-${suffix}`;
+}
+
+/**
  * The only Lambda primitive this repository uses.
  *
  * It exists so the observability contract cannot be forgotten on a new function:
@@ -45,6 +60,9 @@ export class ObservableFunction extends nodejs.NodejsFunction {
       deadLetterQueueEnabled: props.deadLetterQueue !== undefined,
       deadLetterQueue: props.deadLetterQueue,
       logGroup: new logs.LogGroup(scope, `${id}Logs`, {
+        // Named explicitly so the group keeps the conventional `/aws/lambda/` prefix
+        // instead of the opaque CloudFormation-generated name a bare LogGroup gets.
+        logGroupName: logGroupNameFor(scope, id, props),
         retention: logs.RetentionDays.THREE_MONTHS,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),

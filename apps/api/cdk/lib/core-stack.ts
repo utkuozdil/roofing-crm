@@ -41,6 +41,7 @@ export class CoreStack extends cdk.Stack {
     });
 
     this.operationsTopic = new sns.Topic(this, 'OperationsTopic', {
+      topicName: `${SERVICE_NAME}-${props.targetEnv}-operations`,
       displayName: `${SERVICE_NAME} operations alerts`,
     });
 
@@ -50,6 +51,9 @@ export class CoreStack extends cdk.Stack {
      * operator replaces `routingKey` with the real PagerDuty integration key.
      */
     this.pagerDutySecret = new secretsmanager.Secret(this, 'PagerDutyRoutingKey', {
+      // Named so the operator who has to paste the real key in can find it, and so the
+      // IAM grant that scopes the notifier to this one ARN is auditable by eye.
+      secretName: `${SERVICE_NAME}/${props.targetEnv}/pagerduty-routing-key`,
       description: `PagerDuty Events API v2 routing key for ${SERVICE_NAME}`,
       generateSecretString: {
         secretStringTemplate: JSON.stringify({}),

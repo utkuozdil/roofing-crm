@@ -35,6 +35,21 @@ describe('every Lambda carries the observability contract', () => {
       }
     }
   });
+
+  it('gives each function a distinct conventionally named log group', () => {
+    const names = [coreTemplate, apiTemplate].flatMap((template) =>
+      Object.values(template.findResources('AWS::Logs::LogGroup')).map(
+        (group) => group.Properties.LogGroupName as string,
+      ),
+    );
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      expect(name).toMatch(new RegExp(`^/aws/lambda/${SERVICE_NAME}-dev-`));
+    }
+    // Two wrapper constructs both name their inner function `Function`, so an id-only
+    // log-group name would collide and fail the deploy.
+    expect(new Set(names).size).toBe(names.length);
+  });
 });
 
 describe('the async alert notifier has a DLQ with one self-resolving alarm', () => {
