@@ -124,4 +124,16 @@ describe('buildSystemPrompt', () => {
   it('tells the model not to answer the question itself', () => {
     expect(prompt).toContain('never answer the question yourself');
   });
+
+  /**
+   * The router refuses permit questions on its own when the dataset has none, so this is about
+   * the wording the operator reads: a model that thinks permits are searchable writes refusals
+   * that offer a capability the deployment does not have.
+   */
+  it('tells the model when the dataset carries no permit history', () => {
+    const withoutPermits = buildSystemPrompt(new Date('2026-09-01T00:00:00.000Z'), false);
+    expect(withoutPermits).toContain('NO permit history');
+    expect(withoutPermits).toContain('out_of_scope');
+    expect(prompt).not.toContain('NO permit history');
+  });
 });

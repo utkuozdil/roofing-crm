@@ -24,16 +24,31 @@ export const API_BASE_PATH = SERVICE_NAME;
 /**
  * Model that translates a natural-language question into the app's structured filters.
  *
- * A first-party Bedrock model reached through the execution role, so the feature has no API
- * key to configure, rotate, or leak — the same reason the PagerDuty routing key is a secret
- * ARN rather than an environment variable.
+ * Reached through the execution role, so the feature has no API key to configure, rotate, or
+ * leak — the same reason the PagerDuty routing key is a secret ARN rather than an environment
+ * variable.
  *
- * Nova Pro rather than Claude: Anthropic models on Bedrock are AWS Marketplace subscriptions,
- * which this account cannot complete, and a model the deploy cannot invoke is not a model.
- * The `us.` prefix selects the cross-region inference profile, which is the only on-demand
- * route Nova Pro offers.
+ * Claude Haiku 4.5. The `us.` prefix selects the cross-region inference profile, which is the
+ * on-demand route for it. Haiku rather than a larger Claude because the job is one small
+ * structured extraction on the operator's critical path: the whole value of the feature is that
+ * the interpretation appears while they are still looking at the panel.
+ *
+ * Claude 3 Haiku (`us.anthropic.claude-3-haiku-20240307-v1:0`) is not a fallback — it is denied
+ * on this account.
  */
-export const NLQ_MODEL_ID = 'us.amazon.nova-pro-v1:0';
+export const NLQ_MODEL_ID = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
+
+/**
+ * The publisher's bucket, read for the parcel snapshot.
+ *
+ * Cross-stack by name rather than by construct reference on purpose: the bucket belongs to the
+ * ingestion pipeline's account-level stack, and importing it as a construct would couple this
+ * app's deploy to that stack's lifecycle. The CRM reads `publish/` and nothing else.
+ */
+export const DATA_BUCKET_NAME = 'oracleseminole-dev-core-databuckete3889a50-3j61xg9mjvf2';
+
+/** The only prefix the serving tier is granted, so the published interface is the boundary. */
+export const DATA_BUCKET_PUBLISH_PREFIX = 'publish/*';
 
 /** CloudFront routes this path prefix to the HTTP API, so the SPA calls the API same-origin. */
 export const TRPC_ROUTE_PREFIX = '/trpc';
@@ -55,15 +70,42 @@ export class ApiStack extends cdk.Stack {
       serviceName: SERVICE_NAME,
       metricsNamespace: METRICS_NAMESPACE,
       targetEnv: props.targetEnv,
-      memorySize: 512,
+      /**
+       * 2048 MB is bought for CPU, not for bytes. The snapshot itself settles at roughly
+       * 80 MB, but decompressing and transposing 181,218 parcels is CPU-bound, and Lambda
+       * scales vCPU with memory — at 512 MB the cold load takes long enough to be visible in
+       * the first search.
+       */
+      memorySize: 2048,
       timeout: cdk.Duration.seconds(30),
       environment: {
         TABLE_NAME: props.table.tableName,
         NLQ_MODEL_ID,
+        DATA_BUCKET_NAME,
       },
     });
 
     props.table.grantReadWriteData(trpcHandler);
+
+    /**
+     * Read-only, and only under `publish/`. The pipeline's `raw/` and `staged/` prefixes are
+     * its own internals; granting them would let a future change here start reading around the
+     * published interface instead of through it, which is exactly the coupling this boundary
+     * exists to prevent.
+     */
+    trpcHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:GetObject'],
+        resources: [`arn:aws:s3:::${DATA_BUCKET_NAME}/${DATA_BUCKET_PUBLISH_PREFIX}`],
+      }),
+    );
+    trpcHandler.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [`arn:aws:s3:::${DATA_BUCKET_NAME}`],
+        conditions: { StringLike: { 's3:prefix': [DATA_BUCKET_PUBLISH_PREFIX] } },
+      }),
+    );
 
     /**
      * Invoke on the inference profile *and* on the foundation models it fans out to: a

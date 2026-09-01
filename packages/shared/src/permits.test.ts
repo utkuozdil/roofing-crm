@@ -148,13 +148,14 @@ describe('mapSeminolePermitStatus', () => {
 describe('permitNaturalKey', () => {
   /** One AppNo covers several structures and permit types, so it is not a key by itself. */
   it('distinguishes rows that share an application number', () => {
-    const base = { permit_number: '21-13064', structure_sequence: 1 };
-    const first = permitNaturalKey({ ...base, permit_type_sequence: 1 });
-    const second = permitNaturalKey({ ...base, permit_type_sequence: 2 });
+    // The county renders both sequences as composite tokens, not integers.
+    const base = { permit_number: '21-13064', structure_sequence: '0 0' };
+    const first = permitNaturalKey({ ...base, permit_type_sequence: 'BPFN 0' });
+    const second = permitNaturalKey({ ...base, permit_type_sequence: 'BPFN 1' });
     const otherStructure = permitNaturalKey({
       permit_number: '21-13064',
-      structure_sequence: 2,
-      permit_type_sequence: 1,
+      structure_sequence: '0 1',
+      permit_type_sequence: 'BPFN 0',
     });
 
     expect(new Set([first, second, otherStructure]).size).toBe(3);

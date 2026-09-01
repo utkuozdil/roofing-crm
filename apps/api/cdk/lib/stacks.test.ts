@@ -2,7 +2,7 @@ import { SERVICE_NAME } from '@roofing-crm/shared';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { ApiStack, NLQ_MODEL_ID } from './api-stack';
+import { ApiStack, DATA_BUCKET_NAME, NLQ_MODEL_ID } from './api-stack';
 import { CoreStack } from './core-stack';
 
 const env = { account: '795366345505', region: 'us-east-2' };
@@ -144,9 +144,101 @@ describe('the tRPC API', () => {
     });
   });
 
+  /**
+   * Pinned as a literal so that changing the model is a deliberate edit in two places. Claude 3
+   * Haiku is called out by name because it is the plausible wrong answer: it reads like a
+   * cheaper Haiku, and it is denied on this account.
+   */
+  it('pins the model to Claude Haiku 4.5', () => {
+    expect(NLQ_MODEL_ID).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+    expect(NLQ_MODEL_ID).not.toBe('us.anthropic.claude-3-haiku-20240307-v1:0');
+  });
+
+  /**
+   * A cross-region inference profile invokes the model in whichever region it routes to, so
+   * pinning the region here would fail at request time — after a green deploy — rather than in
+   * this test.
+   */
+  it('leaves the region open on the foundation-model grant', () => {
+    apiTemplate.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'bedrock:InvokeModel',
+            Resource: Match.arrayWith([
+              'arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0',
+            ]),
+          }),
+        ]),
+      }),
+    });
+  });
+
   /** No key means no key to leak: authentication is the execution role, not an env var. */
   it('holds no model API key in the template', () => {
     const rendered = JSON.stringify(apiTemplate.toJSON());
     expect(rendered).not.toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY|AWS_BEARER_TOKEN_BEDROCK/);
+  });
+});
+
+/**
+ * The CRM serves the county's parcels by reading the pipeline's published Parquet, and the IAM
+ * grant is what makes "through the published interface" true rather than aspirational. These
+ * assertions are about the boundary, not about plumbing: a grant that widened to the whole
+ * bucket would let a later change read the pipeline's internals and still pass every other test.
+ */
+describe('the published parcel snapshot', () => {
+  it('tells the handler which bucket to read', () => {
+    apiTemplate.hasResourceProperties('AWS::Lambda::Function', {
+      Environment: { Variables: Match.objectLike({ DATA_BUCKET_NAME }) },
+    });
+  });
+
+  it('grants read only under publish/, and never write', () => {
+    apiTemplate.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 's3:GetObject',
+            Resource: `arn:aws:s3:::${DATA_BUCKET_NAME}/publish/*`,
+          }),
+        ]),
+      }),
+    });
+
+    const rendered = JSON.stringify(apiTemplate.toJSON());
+    expect(rendered).not.toMatch(/s3:PutObject|s3:DeleteObject/);
+    expect(rendered).not.toMatch(new RegExp(`${DATA_BUCKET_NAME}/(raw|staged|internal)`));
+  });
+
+  /**
+   * Listing cannot be scoped by resource ARN — the resource is the bucket itself — so the
+   * prefix condition is the only thing standing between "list the published snapshot" and
+   * "enumerate the pipeline's internals".
+   */
+  it('constrains listing to the published prefix', () => {
+    apiTemplate.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 's3:ListBucket',
+            Resource: `arn:aws:s3:::${DATA_BUCKET_NAME}`,
+            Condition: { StringLike: { 's3:prefix': ['publish/*'] } },
+          }),
+        ]),
+      }),
+    });
+  });
+
+  /**
+   * Transposing 181,218 parcels into typed arrays is CPU-bound, and Lambda scales vCPU with
+   * memory, so this number is a latency setting. Dropping it would not fail a deploy; it would
+   * show up as a slow first search.
+   */
+  it('gives the handler enough CPU to load the snapshot on a cold start', () => {
+    apiTemplate.hasResourceProperties('AWS::Lambda::Function', {
+      MemorySize: 2048,
+      Timeout: 30,
+    });
   });
 });

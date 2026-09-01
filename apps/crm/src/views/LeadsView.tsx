@@ -18,8 +18,7 @@ export function LeadsView({ leads }: LeadsViewProps) {
         <div>
           <h1>Lead pipeline</h1>
           <p>
-            CRM lead records created from qualified properties, stored in DynamoDB and listed
-            newest-first from the GSI1 recency index.
+            Leads you created from properties on the map, newest first.
           </p>
         </div>
         <button

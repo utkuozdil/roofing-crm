@@ -11,6 +11,7 @@
 
 import { GEOHASH_PRECISION, encodeGeohash } from './geo';
 import {
+  type PermitBbbLookup,
   type PermitIdentity,
   type PermitStatus,
   PERMIT_STATUS_FACTS,
@@ -39,21 +40,41 @@ export interface PermitRecord extends PermitIdentity {
   permit_type: string;
   description: string;
   status: PermitStatus;
-  issued_date: string;
+  /**
+   * Application date. Null on 29% of the published rows — the county's monthly census does
+   * not carry a date for every application — which is why open duration is published as its
+   * own observation rather than derived from this. See {@link open_years}.
+   */
+  issued_date: string | null;
   /**
    * The terminal inspection's Result Date. The source has no explicit close date, so this
    * is null while a permit is unresolved *and* can be null on resolved work whose terminal
    * inspection was not captured.
    */
   closed_date: string | null;
+  /**
+   * How long the permit had been open when its status was last read, and when that reading
+   * happened.
+   *
+   * An observation rather than a property: the county reports "open for N years" as of the
+   * moment the permit detail was fetched. Recomputing it against an unstated "now" is how a
+   * published number turns into a lie the day after publication, and on this dataset it
+   * would also be unusable — the longest-open permits are 1999–2004 applications, 21 of the
+   * 23 of which carry no application date at all.
+   */
+  open_years: number | null;
+  open_years_observed_at: string | null;
   contractor_name: string | null;
   contractor_license: string | null;
   /**
-   * BBB letter grade for the contractor, or null when the enrichment source had no
-   * match. Consumers MUST render the absence explicitly rather than hiding the row —
-   * "no BBB record" is itself a signal a roofing salesperson wants to see.
+   * Which kind of BBB absence a null {@link bbb_rating} is. Consumers MUST render the
+   * distinction: "searched and BBB has no profile" is a finding, "nobody looked" is a gap in
+   * the enrichment, and collapsing them into one blank throws the difference away.
    */
+  bbb_lookup: PermitBbbLookup;
+  /** BBB letter grade for the contractor, or null per {@link bbb_lookup}. */
   bbb_rating: string | null;
+  /** BBB's own 0–100 score, the scale BBB publishes. Null unless `bbb_lookup` is `rated`. */
   bbb_score: number | null;
   bbb_accredited: boolean | null;
   valuation: number | null;
@@ -79,8 +100,28 @@ export interface PropertyRecord {
    * many searches. Never render this raw; use `propertyDisplay` for a titled fallback.
    */
   primary_address: string | null;
-  mailing_city_state_zip: string;
+  /** Absent on ~1.3% of parcels, which is why an absentee-owner test cannot assume a value. */
+  mailing_city_state_zip: string | null;
+  /**
+   * The publisher's absentee-owner verdict, or null when it could not determine one (~1.6%).
+   *
+   * Preferred over deriving the answer from {@link mailing_city_state_zip}, because the
+   * publisher resolves the owner's mailing address against the county's own municipality
+   * boundaries rather than a hand-kept list of city names. The two disagree on 2.5% of
+   * parcels — mostly unincorporated localities such as FOREST CITY, which is inside the
+   * county but is not a city the list would recognise.
+   */
+  owner_out_of_area: boolean | null;
   property_type: PropertyType;
+  /**
+   * The county's own land-use code and label, e.g. `0103 - TOWNHOME`.
+   *
+   * Carried through because {@link property_type} is a seven-value summary of a 205-value
+   * vocabulary: everything institutional, agricultural, industrial and governmental collapses
+   * into `commercial`, and the detail panel should be able to show what the county actually
+   * said. Null on fixture rows, which have no county code behind them.
+   */
+  dor_code: string | null;
   year_built: number | null;
   last_sale_date: string | null;
   last_sale_amount: number | null;
@@ -200,9 +241,19 @@ export function yearsBetween(fromIso: string, now: Date): number {
  * How long a permit has been unresolved. Resolved permits return 0 so an "open for at
  * least N years" filter never matches one. Uses `counts_toward_open_duration` from the
  * county's own status config rather than a second opinion about which statuses are open.
+ *
+ * The county's own measurement wins over arithmetic on the application date. That is not a
+ * preference, it is the only thing that works on the real data: of the 23 confirmed-open
+ * permits in the published history, 21 carry no application date and one carries 1941 for
+ * work the county measured at 21.9 years open. Deriving duration from `issued_date` would
+ * score those 21 at zero and drop the entire answerable population out of an "open for at
+ * least N years" filter — the filter would return nothing and look like a correct empty
+ * result.
  */
 export function permitOpenYears(permit: PermitRecord, now: Date): number {
   if (!PERMIT_STATUS_FACTS[permit.status].countsTowardOpenDuration) return 0;
+  if (permit.open_years !== null) return Math.max(0, permit.open_years);
+  if (permit.issued_date === null) return 0;
   return Math.max(0, yearsBetween(permit.issued_date, now));
 }
 
@@ -210,8 +261,17 @@ export type PermitDurationState = 'open' | 'resolved' | 'unrecorded' | 'void';
 
 export interface PermitDuration {
   state: PermitDurationState;
-  /** Elapsed years for open work, time-to-resolution for resolved work, else null. */
+  /**
+   * Elapsed years for open work, time-to-resolution for resolved work, else null. Null is a
+   * real outcome, not a zero: see {@link permitDuration}.
+   */
   years: number | null;
+  /**
+   * When the county measured an open permit's duration. Non-null only when {@link years} came
+   * from that measurement rather than from arithmetic, so the UI can date the claim instead of
+   * implying it is current.
+   */
+  observedAt: string | null;
   /** Terminal inspection result date, when one was captured. */
   resolvedOn: string | null;
 }
@@ -221,28 +281,38 @@ export interface PermitDuration {
  *
  * A resolved permit whose terminal inspection was never captured has no measurable
  * duration. That is `unrecorded`, not zero — reporting "0 years" for it would invent a
- * same-day turnaround that the county never recorded.
+ * same-day turnaround that the county never recorded. An open permit with neither a county
+ * measurement nor an application date is the same kind of gap: `state: 'open'` with a null
+ * duration, so the UI says the permit is open and declines to say for how long.
  */
 export function permitDuration(permit: PermitRecord, now: Date): PermitDuration {
   if (isUnresolvedPermitStatus(permit.status)) {
+    const measured =
+      permit.open_years ??
+      (permit.issued_date === null ? null : yearsBetween(permit.issued_date, now));
     return {
       state: 'open',
-      years: Math.max(0, yearsBetween(permit.issued_date, now)),
+      years: measured === null ? null : Math.max(0, measured),
+      observedAt: permit.open_years === null ? null : permit.open_years_observed_at,
       resolvedOn: null,
     };
   }
 
   if (PERMIT_STATUS_FACTS[permit.status].lifecycle === 'void') {
-    return { state: 'void', years: null, resolvedOn: null };
+    return { state: 'void', years: null, observedAt: null, resolvedOn: null };
   }
 
   if (!permit.closed_date) {
-    return { state: 'unrecorded', years: null, resolvedOn: null };
+    return { state: 'unrecorded', years: null, observedAt: null, resolvedOn: null };
   }
 
   return {
     state: 'resolved',
-    years: Math.max(0, yearsBetween(permit.issued_date, new Date(permit.closed_date))),
+    years:
+      permit.issued_date === null
+        ? null
+        : Math.max(0, yearsBetween(permit.issued_date, new Date(permit.closed_date))),
+    observedAt: null,
     resolvedOn: permit.closed_date,
   };
 }
@@ -266,8 +336,10 @@ export function deriveRoofAgeYears(
 ): number | null {
   const reroofDates = permits
     .filter((permit) => permit.is_roofing && isSignedOffPermitStatus(permit.status))
-    // No explicit close date in the source, so fall back to the application date.
-    .map((permit) => permit.closed_date ?? permit.issued_date);
+    // No explicit close date in the source, so fall back to the application date. A permit
+    // carrying neither dates nothing and cannot move the roof's age.
+    .map((permit) => permit.closed_date ?? permit.issued_date)
+    .filter((date): date is string => date !== null);
 
   if (reroofDates.length > 0) {
     const newest = reroofDates.reduce((a, b) => (a > b ? a : b));
@@ -283,6 +355,23 @@ export function isOutOfAreaOwner(mailingCityStateZip: string): boolean {
   const zip = upper.match(/\b(\d{5})\b/)?.[1];
   if (zip && SEMINOLE_COUNTY_ZIPS.includes(zip)) return false;
   return !SEMINOLE_COUNTY_CITIES.some((city) => upper.includes(city));
+}
+
+/**
+ * Whether the owner mails somewhere outside the county.
+ *
+ * Prefers the publisher's verdict and falls back to reading the mailing address, which is all
+ * a fixture row has. An owner whose mailing address the county never recorded is **not**
+ * reported as out of area: "we do not know where this owner lives" is not evidence of an
+ * absentee landlord, and an out-of-area filter that swept those in would inflate every
+ * absentee count by the size of the county's own gaps.
+ */
+export function resolveOutOfAreaOwner(
+  property: Pick<PropertyRecord, 'owner_out_of_area' | 'mailing_city_state_zip'>,
+): boolean {
+  if (property.owner_out_of_area !== null) return property.owner_out_of_area;
+  if (property.mailing_city_state_zip === null) return false;
+  return isOutOfAreaOwner(property.mailing_city_state_zip);
 }
 
 export function computeGeohash5(property: Pick<PropertyRecord, 'latitude' | 'longitude'>): string {
@@ -415,9 +504,7 @@ export function matchesFilters(
     if (yearsBetween(property.last_sale_date, now) < filters.minYearsSinceLastSale) return false;
   }
 
-  if (filters.outOfAreaOwnerOnly && !isOutOfAreaOwner(property.mailing_city_state_zip)) {
-    return false;
-  }
+  if (filters.outOfAreaOwnerOnly && !resolveOutOfAreaOwner(property)) return false;
 
   if (filters.poolStatus === 'with_pool' && !property.has_pool) return false;
   if (filters.poolStatus === 'without_pool' && property.has_pool) return false;

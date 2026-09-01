@@ -3,15 +3,13 @@ import { LIVE_SECTIONS, PLACEHOLDER_SECTIONS, type ViewId } from './nav';
 import { useLeads } from './useLeads';
 import { LeadsView } from './views/LeadsView';
 import { MapView } from './views/MapView';
-import { StatusView } from './views/StatusView';
 
 /**
  * Application shell. Lead state is owned here rather than inside either view, so creating
  * a lead from the map's detail panel and managing it in the pipeline operate on one list.
  *
- * The placeholder sections below the live nav are rendered visibly and disabled: they are
- * an acceptance criterion in their own right, showing where the product expands past lead
- * identification without pretending any of it is built.
+ * Disabled placeholder sections are an acceptance criterion: they show where the product
+ * grows past lead identification without pretending any of it is built.
  */
 
 export function App() {
@@ -37,9 +35,6 @@ export function App() {
               onClick={() => setView(section.id)}
             >
               {section.label}
-              {section.id === 'leads' && leads.leads.length > 0 && (
-                <span className="nav-count">{leads.leads.length}</span>
-              )}
             </button>
           ))}
         </nav>
@@ -62,21 +57,17 @@ export function App() {
         </nav>
 
         <p className="sidebar-foot">
-          Seminole County, FL · fixture-backed property data pending the ingestion pipeline
+          Seminole County, FL · 181,218 parcels from the published county roll
         </p>
       </aside>
 
       <main className="content">
         {view === 'map' && <MapView leads={leads} />}
         {view === 'leads' && <LeadsView leads={leads} />}
-        {view === 'status' && <StatusView />}
 
         <section className="planned" data-testid="planned-sections">
           <h2>Planned CRM surfaces</h2>
-          <p className="note">
-            Shown disabled so the shape of the product beyond lead identification is visible. None
-            of these are implemented.
-          </p>
+          <p className="note">Not built yet — this story is lead identification only.</p>
           <ul>
             {PLACEHOLDER_SECTIONS.map((section) => (
               <li key={section.slug} data-testid={`planned-${section.slug}`} aria-disabled="true">

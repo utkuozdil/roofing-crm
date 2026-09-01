@@ -27,6 +27,8 @@ import {
   permitOpenYears,
 } from '@roofing-crm/shared';
 import { loadPropertyFixtures, type PropertyFixture } from './fixtures';
+import { PublishedPropertyDataSource } from './published-source';
+import { S3SnapshotProvider } from './s3-snapshot-provider';
 
 export interface PropertySearchQuery {
   center: GeoPoint;
@@ -36,6 +38,82 @@ export interface PropertySearchQuery {
   limit: number;
   /** Injected so tests and derived roof ages are reproducible. */
   now?: Date;
+}
+
+/** A filter the active source cannot evaluate, with the reason it cannot. */
+export interface UnsupportedFilter {
+  filter: 'permitStatus' | 'minPermitOpenYears' | 'sort';
+  reason: string;
+}
+
+/**
+ * What the loaded permit history does and does not cover.
+ *
+ * Every field is a bound on what an absence means, and they are carried to the UI rather than
+ * summarised into a sentence here, because the numbers move with each publish and a hand-written
+ * caveat would drift away from the data it describes. The county's sweep is still running: it
+ * has harvested a window of months, and the lifecycle of a small fraction of the applications
+ * inside it.
+ */
+export interface PermitCoverage {
+  runId: string;
+  publishedAt: string;
+  /** When the newest permit-status observation in this generation was read. */
+  referenceDate: string | null;
+  permitRows: number;
+  parcelsWithPermits: number;
+  parcelsTotal: number;
+  /** The census window. Nothing outside it has been harvested — which is not the same as none. */
+  firstMonth: string | null;
+  lastMonth: string | null;
+  windowComplete: boolean;
+  /** Applications whose lifecycle has been read. The rest are `unknown`, meaning unharvested. */
+  applicationsWithStatus: number | null;
+  applicationsTotal: number | null;
+  absenceMeaning: string;
+  /** Published permit rows whose parcel is not in the parcel snapshot, so they were dropped. */
+  rowsWithoutParcel: number;
+  indexedParcelsMissing: number;
+  /** Rows whose county status string is outside the CRM's vocabulary and was quarantined. */
+  statusQuarantined: number;
+  /**
+   * Parcels where the publisher's roofing verdict and the CRM's disagree. Expected to be
+   * non-zero: the publisher counts only the nine roofing application-type codes, the CRM also
+   * counts the `BPRF` permit-type vocabulary. Reported so the broader definition is visible
+   * rather than looking like a miscount.
+   */
+  roofingDisagreements: number;
+  loadMs: number;
+  fetchMs: number;
+  parseMs: number;
+  heapUsedMb: number;
+}
+
+/**
+ * Where the rows came from and what that source can and cannot answer.
+ *
+ * Reported to the UI so the dataset banner states the truth rather than a build-time constant,
+ * and so controls that the active source cannot honour are disabled rather than misleading.
+ */
+export interface DatasetProvenance {
+  provider: 'fixture' | 'published-parquet';
+  county: string;
+  rowCount: number;
+  /** False when the source has no permit history, which disables the permit filters. */
+  permitsAvailable: boolean;
+  note: string;
+  snapshot?: {
+    runId: string;
+    publishedAt: string;
+    objectCount: number;
+    loadMs: number;
+    fetchMs: number;
+    parseMs: number;
+    heapUsedMb: number;
+    readyAt: string;
+  };
+  /** Present when permit history is loaded. Absent is the same statement as `false` above. */
+  permits?: PermitCoverage;
 }
 
 export interface PropertySearchResult {
@@ -54,13 +132,51 @@ export interface PropertySearchResult {
   cellsScanned: number;
   /** Rows the haversine pass measured. */
   candidatesScanned: number;
+  /**
+   * Filters that were requested but could not be evaluated, and were therefore dropped.
+   *
+   * Dropped rather than applied-to-nothing on purpose: a source with no permit history cannot
+   * tell an unpermitted parcel from an unknown one, so answering "no matches" would be a
+   * claim it has no grounds for. The caller is expected to say what it ignored.
+   */
+  unsupportedFilters: UnsupportedFilter[];
+  /**
+   * How much of the in-radius population the permit history cannot speak for. Null when no
+   * permit history is loaded — the distinction is between "measured, and this many are unknown"
+   * and "there is nothing to measure".
+   */
+  permitCoverage: InRadiusPermitCoverage | null;
+}
+
+/**
+ * The two permit unknowns for one search, so the result header can bound its own count.
+ *
+ * A "no open permit" result is mostly parcels nobody has looked at. Without these numbers the
+ * count reads as a survey of the county; with them it reads as what it is — a survey of the
+ * fraction whose lifecycle has been harvested.
+ */
+export interface InRadiusPermitCoverage {
+  /** In-radius parcels with no permit in the published window. */
+  withoutPermitsInRadius: number;
+  /** In-radius parcels carrying at least one permit whose lifecycle is unharvested. */
+  unknownPermitStatusInRadius: number;
 }
 
 export interface PropertyDataSource {
+  /**
+   * Whether this source carries permit history at all.
+   *
+   * Synchronous and static, because it is a fact about the source rather than about the data it
+   * has loaded: the natural-language endpoint has to know it before deciding whether a question
+   * is answerable, and making it async would force a 40 MB snapshot load just to find out that
+   * the feature is switched off.
+   */
+  readonly permitsAvailable: boolean;
   search(query: PropertySearchQuery): Promise<PropertySearchResult>;
   getByParcelId(parcelId: string, now?: Date): Promise<PropertyDetail | null>;
   /** Total rows the source holds. Used by the UI's dataset provenance banner. */
   size(): Promise<number>;
+  provenance(): Promise<DatasetProvenance>;
 }
 
 function materialise(fixture: PropertyFixture, now: Date): PropertyDetail {
@@ -97,6 +213,8 @@ function comparator(
 }
 
 export class FixturePropertyDataSource implements PropertyDataSource {
+  /** Fixtures synthesise permit history, so every filter is answerable against them. */
+  readonly permitsAvailable = true;
   private readonly byCell = new Map<string, PropertyFixture[]>();
   private readonly byParcelId = new Map<string, PropertyFixture>();
   private readonly total: number;
@@ -121,6 +239,7 @@ export class FixturePropertyDataSource implements PropertyDataSource {
     let candidatesScanned = 0;
     let totalInRadius = 0;
     let unknownRoofAgeInRadius = 0;
+    let withoutPermits = 0;
     const matched: PropertySearchItem[] = [];
 
     for (const cell of cells) {
@@ -135,6 +254,7 @@ export class FixturePropertyDataSource implements PropertyDataSource {
 
         const property = materialise(fixture, now);
         if (property.roof_age_years === null) unknownRoofAgeInRadius += 1;
+        if (property.permits.length === 0) withoutPermits += 1;
 
         if (!matchesFilters(property, query.filters, now)) continue;
         matched.push({ ...property, distance_miles: Math.round(distance * 100) / 100 });
@@ -150,6 +270,17 @@ export class FixturePropertyDataSource implements PropertyDataSource {
       unknownRoofAgeInRadius,
       cellsScanned: cells.length,
       candidatesScanned,
+      // Fixtures carry permit history, so every filter is answerable against them.
+      unsupportedFilters: [],
+      /**
+       * Fixtures synthesise a status for every permit, so there is no unharvested population
+       * to warn about. Reported as zeroes rather than null so the shape does not change with
+       * the source.
+       */
+      permitCoverage: {
+        withoutPermitsInRadius: withoutPermits,
+        unknownPermitStatusInRadius: 0,
+      },
     };
   }
 
@@ -161,10 +292,30 @@ export class FixturePropertyDataSource implements PropertyDataSource {
   async size(): Promise<number> {
     return this.total;
   }
+
+  async provenance(): Promise<DatasetProvenance> {
+    return {
+      provider: 'fixture',
+      county: 'Seminole County, FL',
+      rowCount: this.total,
+      permitsAvailable: true,
+      note: 'Deterministic fixture dataset behind the PropertyDataSource interface, used for tests and for any environment with no published snapshot configured.',
+    };
+  }
 }
 
 /**
- * Module-scoped so the fixture index is built once per Lambda container and reused
- * across warm invocations. Swap the constructor here for the pipeline-backed source.
+ * The active source, built once per Lambda container and reused across warm invocations.
+ *
+ * Selected by configuration rather than by build: with `DATA_BUCKET_NAME` set the CRM reads the
+ * publisher's real snapshot, and without it the fixture source keeps the site up. That fallback
+ * is the difference between a missing environment variable degrading the dataset and taking the
+ * whole site down.
  */
-export const propertySource: PropertyDataSource = new FixturePropertyDataSource();
+export const propertySource: PropertyDataSource = createPropertySource();
+
+function createPropertySource(): PropertyDataSource {
+  const bucket = process.env.DATA_BUCKET_NAME?.trim();
+  if (!bucket) return new FixturePropertyDataSource();
+  return new PublishedPropertyDataSource(new S3SnapshotProvider(bucket));
+}

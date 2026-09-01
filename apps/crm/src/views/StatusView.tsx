@@ -5,9 +5,9 @@ import { formatNumber } from '../format';
 /**
  * Liveness, readiness, and dataset provenance in one place.
  *
- * The provenance card is the honest half: the properties the CRM is searching come from a
- * seeded fixture source, not from the county, and the UI says so rather than presenting
- * synthetic parcels as records of fact.
+ * The provenance card is the honest half. It names the source the API is actually reading, the
+ * published snapshot it came from, and — just as importantly — what that source does not carry,
+ * so a filter the UI has disabled has a stated reason somewhere the operator can find it.
  */
 
 type Health = Awaited<ReturnType<typeof api.system.health.query>>;
@@ -121,7 +121,12 @@ export function StatusView() {
             <article className="panel">
               <h2>
                 Property dataset
-                <span className="pill pill--warn" data-testid="status-dataset-provider">
+                <span
+                  className={`pill ${
+                    state.probe.dataset.provider === 'published-parquet' ? 'pill--ok' : 'pill--warn'
+                  }`}
+                  data-testid="status-dataset-provider"
+                >
                   {state.probe.dataset.provider}
                 </span>
               </h2>
@@ -132,12 +137,137 @@ export function StatusView() {
                 <dd className="mono" data-testid="status-dataset-rows">
                   {formatNumber(state.probe.dataset.rowCount)}
                 </dd>
+                <dt>Permit history</dt>
+                <dd className="mono" data-testid="status-dataset-permits">
+                  {state.probe.dataset.permitsAvailable ? 'available' : 'not loaded'}
+                </dd>
+                {state.probe.dataset.permits && (
+                  <>
+                    <dt>Permit rows</dt>
+                    <dd className="mono" data-testid="status-permit-rows">
+                      {formatNumber(state.probe.dataset.permits.permitRows)} on{' '}
+                      {formatNumber(state.probe.dataset.permits.parcelsWithPermits)} parcels
+                    </dd>
+                    <dt>Permit load</dt>
+                    <dd className="mono" data-testid="status-permit-load">
+                      {state.probe.dataset.permits.loadMs} ms fetch+parse,{' '}
+                      {state.probe.dataset.permits.heapUsedMb} MB heap
+                    </dd>
+                  </>
+                )}
+                {state.probe.dataset.snapshot && (
+                  <>
+                    <dt>Snapshot</dt>
+                    <dd className="mono" data-testid="status-dataset-snapshot">
+                      {state.probe.dataset.snapshot.runId}
+                    </dd>
+                    <dt>Published</dt>
+                    <dd className="mono">{state.probe.dataset.snapshot.publishedAt}</dd>
+                    <dt>Partitions</dt>
+                    <dd className="mono">{state.probe.dataset.snapshot.objectCount}</dd>
+                    <dt>Load</dt>
+                    <dd className="mono" data-testid="status-dataset-load">
+                      {state.probe.dataset.snapshot.loadMs} ms fetch+parse,{' '}
+                      {state.probe.dataset.snapshot.heapUsedMb} MB heap
+                    </dd>
+                  </>
+                )}
               </dl>
               <p>{state.probe.dataset.note}</p>
             </article>
+
+            {state.probe.dataset.permits && (
+              <PermitCoveragePanel coverage={state.probe.dataset.permits} />
+            )}
           </>
         )}
       </section>
     </div>
+  );
+}
+
+type PermitCoverage = NonNullable<Dataset['permits']>;
+
+const percent = (part: number | null, whole: number | null): string => {
+  if (part === null || whole === null) return 'not measured';
+  return whole === 0 ? '0%' : `${((part / whole) * 100).toFixed(part / whole < 0.01 ? 2 : 1)}%`;
+};
+
+/**
+ * What the permit history cannot answer.
+ *
+ * Every number here bounds a conclusion the results list would otherwise imply. The permit
+ * filters are only as good as the harvest behind them, and the harvest is a 1996-onward window
+ * covering two parcels in five with a status on one application in eight hundred. Stating that
+ * is the difference between "these are the county's open roofing permits" and "these are the
+ * open roofing permits the county has confirmed", and only the second one is true.
+ */
+function PermitCoveragePanel({ coverage }: { coverage: PermitCoverage }) {
+  const statusShare = percent(coverage.applicationsWithStatus, coverage.applicationsTotal);
+
+  return (
+    <article className="panel" data-testid="status-permit-coverage">
+      <h2>
+        Permit coverage
+        <span className="pill pill--warn">partial</span>
+      </h2>
+
+      <dl className="detail-grid">
+        <dt>History window</dt>
+        <dd className="mono" data-testid="permit-coverage-window">
+          {coverage.firstMonth ?? 'unknown'} to {coverage.lastMonth ?? 'unknown'}
+          {coverage.windowComplete ? '' : ' (open-ended)'}
+        </dd>
+
+        <dt>Parcels with a permit</dt>
+        <dd className="mono" data-testid="permit-coverage-parcels">
+          {formatNumber(coverage.parcelsWithPermits)} of {formatNumber(coverage.parcelsTotal)} (
+          {percent(coverage.parcelsWithPermits, coverage.parcelsTotal)})
+        </dd>
+
+        <dt>Applications with a status</dt>
+        <dd className="mono" data-testid="permit-coverage-status">
+          {formatNumber(coverage.applicationsWithStatus)} of{' '}
+          {formatNumber(coverage.applicationsTotal)} ({statusShare})
+        </dd>
+
+        <dt>Status measured at</dt>
+        <dd className="mono">{coverage.referenceDate ?? 'not stated'}</dd>
+
+        <dt>Rows without a parcel</dt>
+        <dd className="mono" data-testid="permit-coverage-dropped">
+          {formatNumber(coverage.rowsWithoutParcel)} dropped,{' '}
+          {formatNumber(coverage.indexedParcelsMissing)} indexed parcels absent
+        </dd>
+
+        <dt>Status strings quarantined</dt>
+        <dd className="mono">{formatNumber(coverage.statusQuarantined)}</dd>
+
+        <dt>Roofing verdict differs</dt>
+        <dd className="mono" data-testid="permit-coverage-roofing">
+          {formatNumber(coverage.roofingDisagreements)} parcels
+        </dd>
+      </dl>
+
+      <p>
+        <strong>No permit on a parcel is not "never permitted".</strong>{' '}
+        {coverage.absenceMeaning ??
+          `A parcel with no permit here had none issued inside the published window.`}
+      </p>
+
+      <p>
+        <strong>An unknown status is unharvested, not closed.</strong> Only {statusShare} of
+        applications have had their lifecycle read, so a parcel with an unknown-status permit is
+        never presented as having no open permit — the permit filters match on confirmed-open
+        permits only, and every search reports how many in-radius parcels it could not speak for.
+      </p>
+
+      <p>
+        <strong>A missing contractor rating has four distinct meanings.</strong> The detail panel
+        separates <em>rated</em>, <em>matched but unrated</em>, <em>searched with no match</em>, and{' '}
+        <em>never looked up</em>, because collapsing them would read as a judgement on the
+        contractor rather than a gap in the lookup.
+      </p>
+    </article>
   );
 }

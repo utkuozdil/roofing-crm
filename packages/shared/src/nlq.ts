@@ -145,6 +145,17 @@ export const NLQ_EXAMPLE_QUESTIONS: readonly string[] = [
   'Open roofing permits stuck for more than 3 years in Oviedo',
 ];
 
+/**
+ * The permit example, dropped when the active dataset carries no permit history.
+ *
+ * An example question the CRM would refuse is worse than one fewer example: the panel offers
+ * these as buttons, so a listed question that cannot be answered reads as a broken feature.
+ */
+export const NLQ_PERMIT_EXAMPLE = 'Open roofing permits stuck for more than 3 years in Oviedo';
+
+/** Replaces the permit example, so the panel still offers six worked questions. */
+export const NLQ_NO_PERMIT_EXAMPLE = 'Condos in Altamonte Springs worth over $250,000';
+
 /** Stated in the refusal so a rejected question tells the operator what would work. */
 export const NLQ_CAPABILITIES: readonly string[] = [
   'roof age, including parcels with no recorded build year',
@@ -154,6 +165,34 @@ export const NLQ_CAPABILITIES: readonly string[] = [
   'last sale: how long ago, or sold since a given year',
   'just value, pool, and property type',
 ];
+
+/** The permit capability line, named so it can be withdrawn when permits are unavailable. */
+export const NLQ_PERMIT_CAPABILITY =
+  'permit history: unresolved, unresolved roofing, none, and how long one has been open';
+
+/**
+ * What the panel says it can do, given what the active dataset holds.
+ *
+ * Withdrawing the permit line rather than leaving it in place matters: the capability list is
+ * what a refusal points the operator at, and pointing them at a filter the data cannot support
+ * would send them straight into a second refusal.
+ */
+export function nlqCapabilities(permitsAvailable: boolean): readonly string[] {
+  if (permitsAvailable) return NLQ_CAPABILITIES;
+  return NLQ_CAPABILITIES.filter((line) => line !== NLQ_PERMIT_CAPABILITY);
+}
+
+export function nlqExampleQuestions(permitsAvailable: boolean): readonly string[] {
+  if (permitsAvailable) return NLQ_EXAMPLE_QUESTIONS;
+  return NLQ_EXAMPLE_QUESTIONS.map((question) =>
+    question === NLQ_PERMIT_EXAMPLE ? NLQ_NO_PERMIT_EXAMPLE : question,
+  );
+}
+
+/** Whether a grounded query leans on permit history at all. */
+export function usesPermitHistory(filters: PropertyFilters, sort: SearchSort): boolean {
+  return filters.permitStatus !== 'any' || filters.minPermitOpenYears > 0 || sort === 'permit_age';
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));

@@ -4,10 +4,12 @@
 
 **Live URL:** https://d3jfjqgra0c58a.cloudfront.net
 
-The map, radius search, lead filters, property detail, and lead CRUD are all implemented
-and live. The RAG agent is mounted but not wired, and the property dataset is a seeded
-fixture standing in for the ingestion pipeline — both are called out in
-[Stubbed](#what-is-stubbed).
+The map, radius search, lead filters, property detail, lead CRUD, and the
+natural-language query panel are all implemented and live, serving the **181,218 real
+Seminole County parcels** published by the ingestion pipeline. What remains deliberately
+absent is called out in [Stubbed](#what-is-stubbed) — most importantly, the published
+snapshot carries no permit history, and the UI refuses permit questions rather than
+answering them from parcels alone.
 
 The CloudFront distribution serves both the SPA and the API from one origin, so the
 browser never makes a cross-origin call and there is no API URL to inject at build time:
@@ -41,10 +43,18 @@ which cannot reliably drag a map. So **no capability in this product is gesture-
 | Capability    | Map interaction   | Equivalent DOM control                                 |
 | ------------- | ----------------- | ------------------------------------------------------ |
 | Search centre | Click to drop pin | Text input accepting address, city, ZIP, or `lat,lon`  |
-| Search centre | —                 | "Use my location" button (degrades when denied)        |
+| Search centre | —                 | "Use my location" button (GPS; degrades when denied)   |
 | Radius        | —                 | `<input type="range">` **and** `<input type="number">` |
 | Pan / zoom    | —                 | Six buttons                                            |
 | Open property | Click a pin       | Address button in the candidate table                  |
+
+**GPS is written for the case where it fails.** A headless browser refuses geolocation, an
+insecure origin exposes no API at all, and a real user may simply decline. Each of those
+resolves to a stated status line — the deployed site reports "Location permission was denied.
+The map kept its previous centre" under Playwright — and leaves the existing centre alone. A
+fix outside Seminole County is reported rather than used, because centring there would return
+nothing and read as a failed search instead of a device that is somewhere else. Nothing in
+the product is reachable only through GPS.
 
 The map itself is a single SVG over static raster tiles rather than a mapping library.
 Tiles are plain `<image>` elements, so an unreachable or blocked tile host leaves the
@@ -58,17 +68,18 @@ not proof a filter has taken effect.
 
 ### Radius search
 
-Two-phase, implemented this way over fixtures because it is how it must work over real
-data:
+Two-phase, which is what keeps it fast over 181,218 parcels:
 
 1. Compute every geohash-5 cell that can contain a point inside the radius and read only
    those buckets. The candidate set is bounded by area, not by dataset size.
 2. Measure exact haversine distance on the candidates, discarding the bounding-box
    corners that fall outside the true circle.
 
-A test asserts phase one agrees exactly with a brute-force sweep of the whole dataset at
-five radii, because a prefix phase that dropped an in-radius point would silently hide
-leads. The UI surfaces the cell and candidate counts per query.
+A 3-mile search reads 9 of the county's 56 partitions and measures 48,011 candidates
+instead of all 181,218; a 1-mile search reads 2 and measures 10,769. A test asserts phase
+one agrees exactly with a brute-force sweep of the whole dataset at five radii, because a
+prefix phase that dropped an in-radius point would silently hide leads. The UI surfaces
+the cell and candidate counts per query.
 
 ### Roof age derivation
 
@@ -84,10 +95,9 @@ never recorded.
 
 ### Missing data, and what the filters do about it
 
-Field nullability is taken from measurements against the 181,218 ingested parcels rather
-than guessed, and the fixture generator reproduces those rates
-(`MEASURED_MISSING_RATES`) so the UI is exercised against the county's real sparsity.
-Coordinates and the three valuation fields are always present; the gaps that matter:
+These are the county's own gaps, served straight from the published snapshot; the test
+fixture reproduces the same rates (`MEASURED_MISSING_RATES`) so unit tests exercise them
+too. Coordinates and the three valuation fields are always present; the gaps that matter:
 
 | Gap                                          | Rate  | Treatment                                                                                            |
 | -------------------------------------------- | ----- | ---------------------------------------------------------------------------------------------------- |
@@ -126,6 +136,101 @@ alert_and_quarantine` rule. An application number is **not** unique — the natu
 `encodeGeohash` was verified to agree exactly with the pipeline's Python encoder, so a
 change to either that would make the prefix pass skip partitions fails a test.
 
+### The property dataset
+
+The CRM reads the ingestion pipeline's **published** interface and nothing else: the
+partitioned Parquet under `publish/` in the pipeline's data bucket, located through
+`publish/current.json` so a new snapshot is picked up without a redeploy and without a
+snapshot id hard-coded here. No pipeline internals, no second copy of the pipeline, and
+IAM enforces it — `s3:GetObject` is granted on `publish/*` only, and `s3:ListBucket`
+carries a matching prefix condition.
+
+| Snapshot `recon-verify-1788271882` |                                          |
+| ---------------------------------- | ---------------------------------------- |
+| Parcels                            | 181,218                                  |
+| Objects read                       | 56, one per geohash-5 partition, 40.7 MB |
+| Coordinate coverage                | 100%                                     |
+| Permit history                     | not published                            |
+
+Parsed with `hyparquet` and **transposed into columns as each partition arrives** —
+`Int32Array`/`Float64Array` for numerics, dictionary-coded strings for low-cardinality
+text, packed bit flags for booleans. Holding 181,218 rows as plain objects costs 785 MB of
+heap, which fits in no reasonable Lambda; the columnar snapshot settles at ~129 MB, and the
+row-shaped `PropertyDetail` is materialised only for the rows actually rendered. The
+approach is taken from the pipeline repo's `parcel-store.ts` rather than rediscovered.
+
+Filters run as column-wise predicates over the typed arrays, so a 25-mile county-wide
+search never allocates 181,218 objects. `apps/api/src/data/published-source.test.ts` asserts
+the column predicate agrees with the shared `matchesFilters` row predicate, because two
+implementations of one filter set is exactly where a quiet disagreement would live.
+
+The 2048 MB Lambda is bought for CPU, not bytes: decompressing and transposing the snapshot
+is CPU-bound and Lambda scales vCPU with memory.
+
+The seeded 360-row fixture is kept as a test source. `properties.dataset` reports which one
+is serving — `published-parquet` or `fixture` — and the Platform status view shows it, so
+synthetic rows can never pose as county records.
+
+### Natural-language query
+
+One model call, `generateObject` against a Zod schema, on
+`us.anthropic.claude-haiku-4-5-20251001-v1:0` through Bedrock with the Lambda's execution
+role — no API key to configure, rotate, or leak. The model's only job is to fill in a filter
+set from one sentence. It never sees a property row, so it has nothing to be confidently
+wrong about, and it never produces a count.
+
+Everything after the parse is deterministic. A grounding layer resolves places against the
+county gazetteer (a name it cannot resolve is refused, not guessed at), derives the radius
+and location mode from the question text, and rejects anything out of scope. The count is
+then measured by running the grounded filters through the same `PropertyDataSource.search`
+the SPA is about to call — so "22,817 matches" is the cardinality of the filter set, checked
+by the predicate the rows are checked by.
+
+The panel returns a query, an interpretation, and a count — never rows. The SPA applies that
+query to the same state its own controls write to, so the map, the filter inputs, and the
+results list move together, and a filter the chat set stays adjustable by hand. There is no
+second result set that can drift out of agreement with the first.
+
+Repeated questions are cached per container, keyed on the question text and the date — not on
+the map position, because "here" is resolved after the parse, so keying on coordinates would
+miss on every pixel of map movement while changing no answer. `maxOutputTokens` is 400: the
+draft is about twenty short fields, and a larger ceiling would only let a confused generation
+run on while the operator waits.
+
+`e2e/nlq.spec.ts` asserts the link between the interpretation and the rows rather than the
+prose: both panels publish the filters they claim, the suite checks they agree, and checks
+the rendered rows satisfy them. That is only possible because the parse is structured.
+
+### Measured against the deployed site
+
+Every number here is from the live API over the published snapshot, not from the fixture.
+Counts are `properties.search` totals for the query the panel echoed back.
+
+| Question                                                                        | Interpreted as                                                          | Matches |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ------- |
+| Show me houses with roofs older than 20 years within 5 miles of Sanford         | 5 mi of Sanford 32771, roof ≥ 20 yrs, residential                       | 22,817  |
+| Which homes near Oviedo have a pool and an old roof?                            | 5 mi of Oviedo 32765, roof ≥ 20 yrs, has pool, residential              | 12,078  |
+| Find absentee owners in Winter Springs with roofs over 25 years old             | 5 mi of Winter Springs 32708, roof ≥ 25 yrs, owner mails outside county | 4,256   |
+| Properties in Lake Mary worth more than $400,000 that have not sold in 10 years | 5 mi of Lake Mary 32746, no sale in 10 yrs, just value ≥ $400,000       | 9,024   |
+| Roofing permits open more than 3 years in Altamonte Springs                     | refused — the published dataset carries no permit history               | —       |
+| What is the weather in Miami?                                                   | refused — not a property search                                         | —       |
+| Show me parcels in Orange County                                                | refused — outside Seminole County                                       | —       |
+
+County-wide, 181,218 parcels are reachable within the 25-mile cap; 19,239 have no derivable
+roof age, and the default 15-year threshold matches 143,051.
+
+Latency, measured end to end from a laptop against `us-east-2`:
+
+| Path                        | Cold                                      | Warm                            |
+| --------------------------- | ----------------------------------------- | ------------------------------- |
+| Search                      | ~4.1 s (3.0 s of it loading the snapshot) | 9–270 ms server-side, avg 86 ms |
+| Chat, new question          | ~5.2 s                                    | 1.2–2.0 s                       |
+| Chat, question asked before | —                                         | ~0.2 s (cached)                 |
+
+Cold means a container that has not yet read the snapshot: 838 ms fetching 56 objects, 495 ms
+parsing and transposing, ~700 ms Node init. Peak Lambda memory is 443 MB of the 2048 MB
+provisioned, ~129 MB of which is the snapshot itself.
+
 ### Stacks
 
 Deployed to account `795366345505`, region `us-east-2`, bootstrap qualifier `hnb659fds`.
@@ -133,7 +238,8 @@ Deployed to account `795366345505`, region `us-east-2`, bootstrap qualifier `hnb
 - **Core** — DynamoDB single table (on-demand, `PK`/`SK`, `GSI1` for lead recency), the
   operations SNS topic, the stubbed PagerDuty routing-key secret, and the alert notifier
   Lambda with its DLQ and alarm.
-- **Api** — the tRPC Lambda behind an API Gateway HTTP API.
+- **Api** — the tRPC Lambda behind an API Gateway HTTP API, with read access to the
+  pipeline's `publish/` prefix and `bedrock:InvokeModel` on the pinned model.
 - **Web** — the S3 site bucket, CloudFront with Origin Access Control, and the SPA
   rewrite function.
 
@@ -325,26 +431,29 @@ CloudFront distribution from cold takes roughly 30 minutes.
 
 ## What is stubbed
 
-Two things are deliberately not real, and the UI says so on screen rather than only here.
+**Permit history is not in the published dataset.** The snapshot is one row per parcel;
+the permit harvest is a separate pipeline deliverable and has not been published. The
+assignment's second lead criterion — roofing permits left open for years — therefore cannot
+be answered from this data, and the product says so in three places rather than degrading
+quietly:
 
-**The property dataset.** The Oracle ingestion pipeline that produces real Seminole County
-parcels, permits, and BBB enrichment is a concurrent deliverable and was not available.
-Rather than block on it or invent an API that does not exist, the record contract lives in
-`packages/shared` as the single source of truth, and a seeded 360-row fixture dataset sits
-behind a `PropertyDataSource` interface in `apps/api/src/data/`. Generation is deterministic
-from a fixed seed, so a given parcel id always carries the same owner, permits, and
-coordinates. Replacing it is one constructor call in `property-source.ts`; no UI change.
-The Platform status view and the API's `properties.dataset` procedure both report
-`provider: fixture` so synthetic rows are never presented as county records.
+- The permit filter and permit-age input are disabled with the reason on the control, and
+  `permit_age` is not offered as a sort.
+- `properties.search` returns any filter it could not evaluate in `unsupportedFilters`, so
+  a dropped clause is reported rather than assumed.
+- A natural-language permit question is **refused**, not answered. Dropping the permit
+  clause would turn "roofing permits open more than 3 years in Altamonte Springs" into
+  "parcels near Altamonte Springs" and return thousands of rows to a question nobody asked.
+  The model is also told the dataset has no permits, so its own refusal wording cannot
+  promise a capability this deployment lacks.
 
-Two things about the fixture are now measured rather than invented: field nullability
-matches the real ingested rates, and permit codes and statuses come from the county's
-published vocabulary. No permits are ingested yet, so permit _rows_ remain synthetic even
-though the codes they carry are real.
+A parcel's detail panel distinguishes "no permits on record for this parcel" from "permit
+history is not part of the published dataset" — the second is a fact about the dataset, and
+stating the first instead would be a claim about the parcel that nothing supports.
 
-**The RAG agent.** `RagChatMount` is the seam the retrieval engine attaches to — a laid-out
-panel with the controls it needs, held disabled and labelled "Not yet wired", showing the
-live centre, radius, and filter set it will be handed. No LLM layer is built.
+Permit _classification_ is built and unit-tested against the county's real vocabulary, so
+the harvest can be wired in without touching the UI: `PropertyDataSource.permitsAvailable`
+flips to `true` and every control above re-enables itself.
 
 Also not implemented:
 

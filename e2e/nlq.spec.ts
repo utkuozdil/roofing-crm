@@ -197,21 +197,30 @@ test('“Properties that haven’t sold in 20 years” does not silently apply a
     await expect(page.getByTestId('roof-age-input')).toHaveValue('0');
   });
 
-  await test.step('the rows answer that query and include newer roofs', async () => {
-    await waitForResultsToMatch(page, interpretation);
-    expect(await expectCountsAgree(page, interpretation)).toBeGreaterThan(0);
+  let withoutRoofFilter = 0;
 
-    const rows = page.getByTestId('result-row');
-    const roofAges: number[] = [];
-    for (let index = 0; index < Math.min(await rows.count(), 25); index += 1) {
-      const parcelId = await rows.nth(index).getAttribute('data-parcel-id');
-      const text = await page.getByTestId(`row-roof-age-${parcelId}`).innerText();
-      const years = Number.parseFloat(text);
-      if (Number.isFinite(years)) roofAges.push(years);
-    }
-    expect(roofAges.length).toBeGreaterThan(0);
-    // Proof the threshold is genuinely absent rather than merely reported as absent.
-    expect(Math.min(...roofAges)).toBeLessThan(15);
+  await test.step('the rows answer that query', async () => {
+    await waitForResultsToMatch(page, interpretation);
+    withoutRoofFilter = await expectCountsAgree(page, interpretation);
+    expect(withoutRoofFilter).toBeGreaterThan(0);
+  });
+
+  /**
+   * Proof the threshold is genuinely absent rather than merely reported as absent: imposing it
+   * afterwards has to remove parcels. Checked by count rather than by scanning the visible
+   * rows, because parcels that have not changed hands in twenty years skew old — county-wide,
+   * only one of the nearest two hundred has a roof under fifteen years — so a page of rows is
+   * not evidence either way.
+   */
+  await test.step('imposing the default threshold afterwards removes parcels', async () => {
+    await page.getByTestId('roof-age-input').fill('15');
+    const count = page.getByTestId('result-count');
+    await expect(count).toHaveAttribute('data-roof-age', '15');
+    await expect(count).toHaveAttribute('data-searching', 'false');
+
+    const narrowed = matchCount((await page.getByTestId('result-count').innerText()).trim());
+    expect(narrowed).toBeGreaterThan(0);
+    expect(narrowed).toBeLessThan(withoutRoofFilter);
   });
 });
 
@@ -296,13 +305,42 @@ test('a question about another county is refused rather than answered with local
   await expect(page.getByTestId('center-readout')).toHaveText(centreBefore);
 });
 
+/**
+ * A permit question against a parcels-only dataset is refused, not silently reduced.
+ *
+ * Dropping the permit clause would turn "roofing permits open over 3 years in Oviedo" into
+ * "parcels in Oviedo" and answer with thousands of rows nobody asked about — the failure mode
+ * that matters most here, because the reply would still look like an answer.
+ */
+test('a permit question is refused when the dataset carries no permit history', async ({
+  page,
+}) => {
+  const permitsAvailable = await page.getByTestId('permit-status-select').isEnabled();
+  test.skip(permitsAvailable, 'This deployment serves a dataset that does carry permit history.');
+
+  const centreBefore = await page.getByTestId('center-readout').innerText();
+  const countBefore = (await page.getByTestId('result-count').innerText()).trim();
+
+  await page.getByTestId('rag-chat-input').fill('Roofing permits open more than 3 years in Oviedo');
+  await page.getByTestId('rag-chat-send').click();
+
+  await expect(page.getByTestId('rag-refusal')).toBeVisible();
+  await expect(page.getByTestId('rag-refusal-message')).toContainText('no permit history');
+
+  await test.step('nothing was applied, so no permit-free result set poses as the answer', async () => {
+    await expect(page.getByTestId('rag-interpretation')).toHaveCount(0);
+    await expect(page.getByTestId('center-readout')).toHaveText(centreBefore);
+    await expect(page.getByTestId('result-count')).toHaveText(countBefore);
+  });
+});
+
 test('an example question can be run from the panel itself', async ({ page }) => {
   await page.getByTestId('rag-example-0').click();
 
   const interpretation = page.getByTestId('rag-interpretation');
   await expect(interpretation).toBeVisible();
   await expect(page.getByTestId('rag-chat-input')).not.toHaveValue('');
-  await expect(page.getByTestId('rag-applied')).toBeVisible();
+  await expect(page.getByTestId('rag-applied')).toBeAttached();
 
   await waitForResultsToMatch(page, interpretation);
   await expectCountsAgree(page, interpretation);

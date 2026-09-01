@@ -13,7 +13,7 @@
 
 import {
   haversineMiles,
-  isOutOfAreaOwner,
+  resolveOutOfAreaOwner,
   isUnresolvedPermitStatus,
   matchesFilters,
   type NlqQueryDraft,
@@ -208,7 +208,7 @@ describe('an answered question is grounded in the rows it describes', () => {
       // this fails if the criteria and the filters ever stop describing the same thing.
       expect(row.roof_age_years).not.toBeNull();
       expect(row.roof_age_years!).toBeGreaterThanOrEqual(25);
-      expect(isOutOfAreaOwner(row.mailing_city_state_zip)).toBe(true);
+      expect(resolveOutOfAreaOwner(row)).toBe(true);
       expect(row.permits.some((permit) => isUnresolvedPermitStatus(permit.status))).toBe(true);
       expect(haversineMiles(answer.query.center, row)).toBeLessThanOrEqual(
         answer.query.radiusMiles,

@@ -6,7 +6,7 @@ import {
   classifyRoofingPermit,
   computeGeohash5,
   haversineMiles,
-  isOutOfAreaOwner,
+  resolveOutOfAreaOwner,
   isUnresolvedPermitStatus,
   matchesFilters,
   permitNaturalKey,
@@ -152,9 +152,12 @@ describe('the fixture dataset', () => {
       row.permits.some((permit) => permit.is_roofing && isUnresolvedPermitStatus(permit.status)),
     );
     const staleRoofing = withUnresolvedRoofing.filter((row) =>
-      row.permits.some((permit) => permit.is_roofing && permit.issued_date < '2020-01-01'),
+      row.permits.some(
+        (permit) =>
+          permit.is_roofing && permit.issued_date !== null && permit.issued_date < '2020-01-01',
+      ),
     );
-    const outOfArea = fixtures.filter((row) => isOutOfAreaOwner(row.mailing_city_state_zip));
+    const outOfArea = fixtures.filter((row) => resolveOutOfAreaOwner(row));
     const missingBbb = fixtures.filter((row) =>
       row.permits.some((permit) => permit.contractor_name !== null && permit.bbb_rating === null),
     );

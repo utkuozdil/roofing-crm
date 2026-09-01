@@ -1,13 +1,11 @@
 /**
  * CRM navigation.
  *
- * `PLACEHOLDER_SECTIONS` is an explicit acceptance criterion: the product has to show the
- * shape it will grow into, rendered visibly but disabled. They are data rather than
- * hand-written markup so the sidebar and the roadmap panel can never disagree about which
- * surfaces exist, and so the e2e suite can assert every one of them is disabled.
+ * `PLACEHOLDER_SECTIONS` is an acceptance criterion: the story is lead identification only,
+ * and the rest of a roofing CRM has to be visible but disabled so that scope is obvious.
  */
 
-export type ViewId = 'map' | 'leads' | 'status';
+export type ViewId = 'map' | 'leads';
 
 export interface NavSection {
   id: ViewId;
@@ -24,17 +22,11 @@ export const LIVE_SECTIONS: readonly NavSection[] = [
   {
     id: 'leads',
     label: 'Lead pipeline',
-    description: 'CRM lead records created from qualified properties',
-  },
-  {
-    id: 'status',
-    label: 'Platform status',
-    description: 'API, datastore, and dataset provenance checks',
+    description: 'Leads created from properties on the map',
   },
 ];
 
 export interface PlaceholderSection {
-  /** Stable slug used for the `data-testid`. */
   slug: string;
   label: string;
   description: string;

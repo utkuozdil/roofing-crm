@@ -7,3 +7,7 @@ packages:
 # needs it. Every other dependency stays script-free.
 allowBuilds:
   esbuild: true
+
+minimumReleaseAgeExclude:
+  - '@ai-sdk/amazon-bedrock@5.0.69'
+  - '@ai-sdk/openai@4.0.53'

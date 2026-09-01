@@ -11,12 +11,17 @@ import {
   type PropertySearchItem,
   type SearchSort,
 } from '@roofing-crm/shared';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { api } from '../api';
 import { MapCanvas } from '../components/MapCanvas';
+import { MapControls } from '../components/MapControls';
 import { PropertyDetailPanel } from '../components/PropertyDetailPanel';
 import { RagChatMount, type NlqAppliedQuery } from '../components/RagChatMount';
-import { ResultsList, type AppliedQuery } from '../components/ResultsList';
+import {
+  ResultsList,
+  type AppliedQuery,
+  type InRadiusPermitCoverage,
+} from '../components/ResultsList';
 import { SearchPanel, type PanDirection } from '../components/SearchPanel';
 import { useGeolocation } from '../useGeolocation';
 import type { useLeads } from '../useLeads';
@@ -37,11 +42,16 @@ const PAN_FRACTION = 0.5;
 
 const MILES_PER_DEGREE_LAT = 69.0546;
 
+const MAP_MIN_HEIGHT = 220;
+const MAP_MAX_HEIGHT = 720;
+const DEFAULT_MAP_HEIGHT = 520;
+
 interface SearchResult {
   items: PropertySearchItem[];
   totalMatched: number;
   totalInRadius: number;
   unknownRoofAgeInRadius: number;
+  permitCoverage: InRadiusPermitCoverage | null;
   cellsScanned: number;
   candidatesScanned: number;
 }
@@ -51,6 +61,7 @@ const EMPTY_RESULT: SearchResult = {
   totalMatched: 0,
   totalInRadius: 0,
   unknownRoofAgeInRadius: 0,
+  permitCoverage: null,
   cellsScanned: 0,
   candidatesScanned: 0,
 };
@@ -69,6 +80,8 @@ export function MapView({ leads }: MapViewProps) {
   const [sort, setSort] = useState<SearchSort>('distance');
   const [zoomOffset, setZoomOffset] = useState(0);
   const [showBasemap, setShowBasemap] = useState(true);
+  const [mapHeight, setMapHeight] = useState(DEFAULT_MAP_HEIGHT);
+  const mapStageRef = useRef<HTMLDivElement>(null);
 
   const [result, setResult] = useState<SearchResult>(EMPTY_RESULT);
   const [applied, setApplied] = useState<AppliedQuery | null>(null);
@@ -76,12 +89,43 @@ export function MapView({ leads }: MapViewProps) {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchNonce, setSearchNonce] = useState(0);
 
+  /**
+   * Assumed true until the API says otherwise, so a slow provenance call never briefly greys out
+   * a filter that in fact works. Getting it wrong for a moment in the permissive direction costs
+   * one refused search; getting it wrong the other way looks like a broken control.
+   */
+  const [permitsAvailable, setPermitsAvailable] = useState(true);
+
   const [selectedParcelId, setSelectedParcelId] = useState<string | null>(null);
   const [fetchedProperty, setFetchedProperty] = useState<PropertyDetail | null>(null);
   const [isLoadingProperty, setIsLoadingProperty] = useState(false);
 
   /** Guards against an earlier in-flight search overwriting a later one's results. */
   const requestSequence = useRef(0);
+
+  const setMapSizeFromHeight = useCallback((raw: number) => {
+    setMapHeight(Math.min(MAP_MAX_HEIGHT, Math.max(MAP_MIN_HEIGHT, Math.round(raw))));
+  }, []);
+
+  const onMapResizePointerDown = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    const top = mapStageRef.current?.getBoundingClientRect().top ?? event.clientY - mapHeight;
+    handle.setPointerCapture(event.pointerId);
+
+    const onMove = (moveEvent: PointerEvent) => {
+      setMapSizeFromHeight(moveEvent.clientY - top);
+    };
+    const onUp = (upEvent: PointerEvent) => {
+      handle.releasePointerCapture(upEvent.pointerId);
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  }, [mapHeight, setMapSizeFromHeight]);
 
   const moveCenter = useCallback((point: GeoPoint, label: string) => {
     setCenter(point);
@@ -97,6 +141,15 @@ export function MapView({ leads }: MapViewProps) {
       [moveCenter],
     ),
   );
+
+  useEffect(() => {
+    // Provenance decides which controls the dataset can honour. A failure here is not worth
+    // surfacing on the map: the Status view reports the dataset, and the filters stay enabled.
+    api.properties.dataset
+      .query()
+      .then((dataset) => setPermitsAvailable(dataset.permitsAvailable))
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     const handle = setTimeout(() => {
@@ -248,21 +301,26 @@ export function MapView({ leads }: MapViewProps) {
 
   return (
     <div className="map-view">
-      <header className="content-head">
-        <div>
-          <h1>Map &amp; radius search</h1>
-          <p>
-            Seminole County, FL. Set a centre by address, ZIP, coordinates, GPS, or a dropped pin,
-            then filter for aged roofs and stalled roofing permits.
+      <div className="map-top">
+        <header className="content-head">
+          <div>
+            <h1>Find leads</h1>
+            <p>Seminole County, FL</p>
+          </div>
+          <p className="visually-hidden" data-testid="search-diagnostics">
+            {result.cellsScanned} geohash-5 cells · {result.candidatesScanned} candidates measured
           </p>
-        </div>
-        <p className="note mono" data-testid="search-diagnostics">
-          {result.cellsScanned} geohash-5 cells · {result.candidatesScanned} candidates measured
-        </p>
-      </header>
+        </header>
+        <RagChatMount
+          center={center}
+          radiusMiles={radiusMiles}
+          filters={filters}
+          resultCount={result.totalMatched}
+          onApplyQuery={handleApplyNlqQuery}
+        />
+      </div>
 
-      <div className="map-layout">
-        <SearchPanel
+      <SearchPanel
           locationText={locationText}
           onLocationTextChange={setLocationText}
           onApplyLocation={handleApplyLocation}
@@ -277,9 +335,7 @@ export function MapView({ leads }: MapViewProps) {
           onSortChange={setSort}
           geolocation={geolocation}
           onUseMyLocation={requestGeolocation}
-          onPan={handlePan}
-          onZoom={(delta) => setZoomOffset((current) => Math.min(3, Math.max(-3, current + delta)))}
-          zoomOffset={zoomOffset}
+          permitsAvailable={permitsAvailable}
           showBasemap={showBasemap}
           onShowBasemapChange={setShowBasemap}
           onSearch={() => setSearchNonce((value) => value + 1)}
@@ -291,56 +347,101 @@ export function MapView({ leads }: MapViewProps) {
           isSearching={isSearching}
         />
 
+      <div className="map-workspace">
         <div className="map-column">
-          <MapCanvas
-            center={center}
-            radiusMiles={radiusMiles}
-            properties={result.items}
-            selectedParcelId={selectedParcelId}
-            zoomOffset={zoomOffset}
-            showBasemap={showBasemap}
-            onPickPoint={(point) => {
-              const clamped = clampToCounty(point);
-              setLocationText(`${clamped.latitude.toFixed(5)},${clamped.longitude.toFixed(5)}`);
-              moveCenter(clamped, 'Dropped pin');
-            }}
-            onSelectProperty={setSelectedParcelId}
+          <div
+            ref={mapStageRef}
+            className="map-stage"
+            data-testid="map-stage"
+            style={{ height: mapHeight }}
+          >
+            <MapCanvas
+              center={center}
+              radiusMiles={radiusMiles}
+              properties={result.items}
+              selectedParcelId={selectedParcelId}
+              zoomOffset={zoomOffset}
+              showBasemap={showBasemap}
+              onPickPoint={(point) => {
+                const clamped = clampToCounty(point);
+                setLocationText(`${clamped.latitude.toFixed(5)},${clamped.longitude.toFixed(5)}`);
+                moveCenter(clamped, 'Dropped pin');
+              }}
+              onSelectProperty={setSelectedParcelId}
+            />
+            <MapControls
+              onPan={handlePan}
+              onZoom={(delta) => setZoomOffset((current) => Math.min(3, Math.max(-3, current + delta)))}
+              zoomOffset={zoomOffset}
+            />
+          </div>
+          <button
+            className="map-resize-handle"
+            type="button"
+            data-testid="map-resize-handle"
+            aria-label="Drag to resize the map"
+            onPointerDown={onMapResizePointerDown}
           />
-
-          <ResultsList
-            items={result.items}
-            selectedParcelId={selectedParcelId}
-            onSelect={setSelectedParcelId}
-            totalMatched={result.totalMatched}
-            totalInRadius={result.totalInRadius}
-            unknownRoofAgeInRadius={result.unknownRoofAgeInRadius}
-            isSearching={isSearching}
-            error={searchError}
-            applied={applied}
-          />
+          <label className="visually-hidden" htmlFor="map-size-slider">
+            Map height
+            <input
+              id="map-size-slider"
+              data-testid="map-size-slider"
+              type="range"
+              min={MAP_MIN_HEIGHT}
+              max={MAP_MAX_HEIGHT}
+              step={10}
+              value={Math.min(MAP_MAX_HEIGHT, Math.max(MAP_MIN_HEIGHT, mapHeight))}
+              onChange={(event) => setMapSizeFromHeight(Number(event.target.value))}
+            />
+            <input
+              data-testid="map-size-input"
+              type="number"
+              min={MAP_MIN_HEIGHT}
+              max={MAP_MAX_HEIGHT}
+              step={10}
+              value={Math.min(MAP_MAX_HEIGHT, Math.max(MAP_MIN_HEIGHT, mapHeight))}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                if (Number.isFinite(next)) setMapSizeFromHeight(next);
+              }}
+              aria-label="Map height in pixels"
+            />
+          </label>
         </div>
 
-        <div className="detail-column">
-          <PropertyDetailPanel
-            property={selectedProperty}
-            isLoading={isLoadingProperty}
-            onClose={() => {
-              setSelectedParcelId(null);
-              leads.resetCreateState();
-            }}
-            onCreateLead={handleCreateLead}
-            createState={leads.createState}
-            existingLeadCount={existingLeadCount}
-          />
-
-          <RagChatMount
-            center={center}
-            radiusMiles={radiusMiles}
-            filters={filters}
-            resultCount={result.totalMatched}
-            onApplyQuery={handleApplyNlqQuery}
-          />
-        </div>
+        <ResultsList
+          items={result.items}
+          selectedParcelId={selectedParcelId}
+          onSelect={setSelectedParcelId}
+          onClear={() => {
+            setSelectedParcelId(null);
+            leads.resetCreateState();
+          }}
+          totalMatched={result.totalMatched}
+          totalInRadius={result.totalInRadius}
+          unknownRoofAgeInRadius={result.unknownRoofAgeInRadius}
+          permitCoverage={result.permitCoverage}
+          isSearching={isSearching}
+          error={searchError}
+          applied={applied}
+          detail={
+            (selectedParcelId || isLoadingProperty) && (
+              <PropertyDetailPanel
+                property={selectedProperty}
+                permitsAvailable={permitsAvailable}
+                isLoading={isLoadingProperty}
+                onClose={() => {
+                  setSelectedParcelId(null);
+                  leads.resetCreateState();
+                }}
+                onCreateLead={handleCreateLead}
+                createState={leads.createState}
+                existingLeadCount={existingLeadCount}
+              />
+            )
+          }
+        />
       </div>
     </div>
   );

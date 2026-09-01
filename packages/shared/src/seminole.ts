@@ -129,6 +129,22 @@ export function nearestPlace(point: GeoPoint): NearestPlace {
   };
 }
 
+/**
+ * Whether a point falls inside the county envelope.
+ *
+ * Used to decide what to do with a GPS fix. The dataset stops at the county line, so silently
+ * centring on a device in another state would produce an empty result list with no explanation
+ * — indistinguishable from a broken search.
+ */
+export function isInsideCounty(point: GeoPoint): boolean {
+  return (
+    point.latitude >= SEMINOLE_COUNTY_BOUNDS.minLatitude &&
+    point.latitude <= SEMINOLE_COUNTY_BOUNDS.maxLatitude &&
+    point.longitude >= SEMINOLE_COUNTY_BOUNDS.minLongitude &&
+    point.longitude <= SEMINOLE_COUNTY_BOUNDS.maxLongitude
+  );
+}
+
 export function clampToCounty(point: GeoPoint): GeoPoint {
   return {
     latitude: Math.min(

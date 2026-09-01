@@ -78,14 +78,31 @@ export function encodeGeohash(
 
 const toRadians = (degrees: number): number => (degrees * Math.PI) / 180;
 
-export function haversineMiles(from: GeoPoint, to: GeoPoint): number {
-  const dLat = toRadians(to.latitude - from.latitude);
-  const dLon = toRadians(to.longitude - from.longitude);
-  const lat1 = toRadians(from.latitude);
-  const lat2 = toRadians(to.latitude);
+/**
+ * Great-circle distance from raw coordinates.
+ *
+ * The object-taking {@link haversineMiles} is the one callers should reach for. This exists
+ * because the published-parcel source measures distance against typed arrays, where wrapping
+ * every row in a `GeoPoint` first would allocate an object per parcel — 181,218 of them on a
+ * county-wide search, for a number that is thrown away in the next statement.
+ */
+export function haversineMilesBetween(
+  fromLatitude: number,
+  fromLongitude: number,
+  toLatitude: number,
+  toLongitude: number,
+): number {
+  const dLat = toRadians(toLatitude - fromLatitude);
+  const dLon = toRadians(toLongitude - fromLongitude);
+  const lat1 = toRadians(fromLatitude);
+  const lat2 = toRadians(toLatitude);
 
   const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   return 2 * EARTH_RADIUS_MILES * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+export function haversineMiles(from: GeoPoint, to: GeoPoint): number {
+  return haversineMilesBetween(from.latitude, from.longitude, to.latitude, to.longitude);
 }
 
 /** Longitude degrees per mile at a given latitude. Guarded near the poles. */

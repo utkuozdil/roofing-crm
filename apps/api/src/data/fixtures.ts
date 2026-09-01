@@ -18,6 +18,7 @@ import {
   classifyRoofingPermit,
   clampToCounty,
   computeGeohash5,
+  type PermitBbbLookup,
   type PermitRecord,
   type PermitStatus,
   type PropertyRecord,
@@ -189,76 +190,88 @@ const PROPERTY_TYPE_WEIGHTS: readonly [PropertyType, number][] = [
 interface Contractor {
   name: string;
   license: string | null;
+  bbb_lookup: PermitBbbLookup;
   bbb_rating: string | null;
+  /** BBB's own 0–100 scale, which is what the published dataset carries. */
   bbb_score: number | null;
   bbb_accredited: boolean | null;
 }
 
 /**
- * Contractors with `bbb_rating: null` are deliberate: the real BBB enrichment will not
- * match every contractor, and the UI has to render that gap explicitly rather than
- * quietly omitting the contractor.
+ * Contractors with `bbb_rating: null` are deliberate, and the three ways of having no rating
+ * are all represented: BBB was searched and has no profile, BBB has a profile it has not
+ * rated, and nobody has looked. The real enrichment matches a minority of contractors, so the
+ * UI has to render *which* gap it is rather than one undifferentiated blank.
  */
 const CONTRACTORS: readonly Contractor[] = [
   {
     name: 'Central Florida Roofing Co',
     license: 'CCC1330218',
+    bbb_lookup: 'rated',
     bbb_rating: 'A+',
-    bbb_score: 4.6,
+    bbb_score: 97,
     bbb_accredited: true,
   },
   {
     name: 'Sanford Roofing & Sheet Metal',
     license: 'CCC1327744',
+    bbb_lookup: 'rated',
     bbb_rating: 'A',
-    bbb_score: 4.2,
+    bbb_score: 94,
     bbb_accredited: true,
   },
   {
     name: 'Apex Shingle Systems',
     license: 'CCC1331902',
+    bbb_lookup: 'rated',
     bbb_rating: 'A+',
-    bbb_score: 4.8,
+    bbb_score: 98,
     bbb_accredited: true,
   },
   {
     name: 'Tuskawilla Roofing Contractors',
     license: 'CCC1329410',
+    bbb_lookup: 'rated',
     bbb_rating: 'A-',
-    bbb_score: 4.0,
+    bbb_score: 93,
     bbb_accredited: true,
   },
   {
     name: 'Lake Mary Exteriors LLC',
     license: 'CCC1332077',
+    bbb_lookup: 'rated',
     bbb_rating: 'B+',
-    bbb_score: 3.8,
+    bbb_score: 85,
     bbb_accredited: false,
   },
   {
     name: 'Oviedo Home Improvement Group',
     license: 'CBC1259033',
+    bbb_lookup: 'rated',
     bbb_rating: 'B',
-    bbb_score: 3.4,
+    bbb_score: 83,
     bbb_accredited: false,
   },
   {
     name: 'Gulf Coast Storm Restoration',
     license: 'CCC1326688',
+    bbb_lookup: 'rated',
     bbb_rating: 'C',
-    bbb_score: 2.9,
+    bbb_score: 74,
     bbb_accredited: false,
   },
   {
     name: 'Statewide Roof Solutions',
     license: 'CCC1334512',
+    bbb_lookup: 'matched_unrated',
     bbb_rating: null,
     bbb_score: null,
-    bbb_accredited: null,
+    bbb_accredited: false,
   },
   {
     name: 'JRD Construction Services',
     license: 'CGC1521804',
+    bbb_lookup: 'searched_no_match',
     bbb_rating: null,
     bbb_score: null,
     bbb_accredited: null,
@@ -266,6 +279,7 @@ const CONTRACTORS: readonly Contractor[] = [
   {
     name: 'Owner / Builder',
     license: null,
+    bbb_lookup: 'not_searched',
     bbb_rating: null,
     bbb_score: null,
     bbb_accredited: null,
@@ -448,8 +462,9 @@ function buildPermits(random: () => number, yearBuilt: number | null): PermitRec
 
     permits.push({
       permit_number: applicationNumber,
-      structure_sequence: structureSequence,
-      permit_type_sequence: index + 1,
+      // Composite strings, the way the county renders them: `"0 0"`, `"BPFN 0"`.
+      structure_sequence: `${structureSequence} 0`,
+      permit_type_sequence: `${kind.permitTypeCode.split(/\s+/)[0]} ${index}`,
       application_type_code: kind.applicationTypeCode,
       permit_type_code: kind.permitTypeCode,
       permit_type: kind.type,
@@ -460,8 +475,16 @@ function buildPermits(random: () => number, yearBuilt: number | null): PermitRec
         resolved && random() > RESOLVED_WITHOUT_CLOSE_DATE_RATE
           ? isoDate(random, Number(issued.slice(0, 4)), Number(issued.slice(0, 4)) + 1)
           : null,
+      /**
+       * Null so the fixture exercises the fallback: with no county measurement the open
+       * duration is derived from the application date. The published dataset is the other
+       * way round — see `permitOpenYears`.
+       */
+      open_years: null,
+      open_years_observed_at: null,
       contractor_name: contractor.name,
       contractor_license: contractor.license,
+      bbb_lookup: contractor.bbb_lookup,
       bbb_rating: contractor.bbb_rating,
       bbb_score: contractor.bbb_score,
       bbb_accredited: contractor.bbb_accredited,
@@ -475,7 +498,7 @@ function buildPermits(random: () => number, yearBuilt: number | null): PermitRec
     });
   }
 
-  return permits.sort((a, b) => b.issued_date.localeCompare(a.issued_date));
+  return permits.sort((a, b) => (b.issued_date ?? '').localeCompare(a.issued_date ?? ''));
 }
 
 function buildProperty(
@@ -544,6 +567,10 @@ function buildProperty(
     mailing_city_state_zip: outOfArea
       ? pick(random, OUT_OF_AREA_MAILING)
       : `${cityLabel.toUpperCase()}, FL ${place.zip}`,
+    // Null so the absentee test falls through to reading the mailing address: fixtures stand
+    // in for the county's records, and the county's published verdict is not one of them.
+    owner_out_of_area: null,
+    dor_code: null,
     property_type: propertyType,
     year_built: yearBuilt,
     last_sale_date: hasSaleDate ? isoDate(random, Math.max(yearBuilt ?? 1990, 1990), 2025) : null,

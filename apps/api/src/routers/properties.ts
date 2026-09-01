@@ -76,6 +76,7 @@ export const propertiesRouter = router({
       totalMatched: result.totalMatched,
       unknownRoofAgeInRadius: result.unknownRoofAgeInRadius,
       includeUnknownRoofAge: query.filters.includeUnknownRoofAge,
+      unsupportedFilters: result.unsupportedFilters.map((entry) => entry.filter),
     });
 
     return result;
@@ -92,14 +93,10 @@ export const propertiesRouter = router({
     }),
 
   /**
-   * Provenance for the banner the UI shows above the map. The pipeline that will supply
-   * real parcels is a separate deliverable, and the UI states plainly which source it is
-   * reading rather than presenting synthetic rows as county records.
+   * Provenance for the banner the UI shows above the map, answered by the source itself
+   * rather than by a constant here, so the banner cannot claim a dataset the API is not
+   * actually reading. It also carries what the source *cannot* answer, which is how the UI
+   * knows to disable the permit controls.
    */
-  dataset: publicProcedure.query(async () => ({
-    provider: 'fixture' as const,
-    county: 'Seminole County, FL',
-    rowCount: await propertySource.size(),
-    note: 'Seeded fixture dataset behind the PropertyDataSource interface. The Oracle ingestion pipeline replaces this source without any UI change.',
-  })),
+  dataset: publicProcedure.query(() => propertySource.provenance()),
 });

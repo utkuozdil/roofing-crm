@@ -91,6 +91,13 @@ export const SEMINOLE_PERMIT_STATUS_MAPPING: Record<string, PermitStatus> = {
   'PERMIT ISSUED': 'active',
   'PERMIT COMPLETE': 'complete',
   'CERTIFICATE OF COMPLETION': 'complete',
+  /**
+   * Added from the published permit history, which carries it on two rows the sampled list
+   * did not have. A certificate of occupancy is the county signing the building off, so it
+   * resolves the permit; quarantining it would have parked two closed permits in `unknown`,
+   * where the open-permit filter treats them as un-harvested rather than done.
+   */
+  'CERTIFICATE OF OCCUPANCY': 'complete',
   CLOSED: 'closed',
   VOIDED: 'void',
 };
@@ -186,13 +193,42 @@ export function classifyRoofingPermit(input: RoofingClassificationInput): Roofin
 }
 
 /**
+ * What kind of absence a missing BBB rating is.
+ *
+ * Four values rather than a nullable rating, because "BBB was searched and has no profile for
+ * this business" and "nobody has looked this business up yet" are different facts and a
+ * salesperson acts differently on each. The published permit history carries this per row;
+ * across 17,565 distinct contractors `not_searched` is the common case.
+ */
+export const PERMIT_BBB_LOOKUPS = [
+  'rated',
+  'matched_unrated',
+  'searched_no_match',
+  'not_searched',
+] as const;
+
+export type PermitBbbLookup = (typeof PERMIT_BBB_LOOKUPS)[number];
+
+/** What the UI should say for each kind of absence. `rated` renders the grade instead. */
+export const PERMIT_BBB_LOOKUP_LABELS: Record<PermitBbbLookup, string> = {
+  rated: 'Rated by BBB',
+  matched_unrated: 'BBB has a profile but no rating',
+  searched_no_match: 'BBB searched — no profile for this business',
+  not_searched: 'BBB not looked up for this contractor',
+};
+
+/**
  * Components of a permit's natural key. An application number alone is not unique — one
  * AppNo covers multiple structures and multiple permit types.
+ *
+ * The two sequences are strings, not numbers: the county renders them as composite tokens
+ * such as `"0 0"` and `"BPFN 0"`, and coercing those to numbers yields `NaN` and silently
+ * merges sibling trade lines that are genuinely distinct permits.
  */
 export interface PermitIdentity {
   permit_number: string;
-  structure_sequence: number | null;
-  permit_type_sequence: number | null;
+  structure_sequence: string | null;
+  permit_type_sequence: string | null;
 }
 
 export function permitNaturalKey(permit: PermitIdentity): string {

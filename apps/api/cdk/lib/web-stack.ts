@@ -109,6 +109,12 @@ function handler(event) {
       distribution,
       distributionPaths: ['/*'],
       prune: true,
+      /**
+       * CloudFront GetInvalidation sometimes 404s the id it just created (CDK #15891).
+       * Waiting for confirmation then fails the stack and rolls the site back. The
+       * invalidation is still created; we just do not block the deploy on it.
+       */
+      waitForDistributionInvalidation: false,
     });
 
     this.distributionDomainName = distribution.distributionDomainName;

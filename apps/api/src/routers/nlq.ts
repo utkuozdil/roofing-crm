@@ -14,8 +14,9 @@
 
 import {
   MAX_QUESTION_LENGTH,
-  NLQ_CAPABILITIES,
-  NLQ_EXAMPLE_QUESTIONS,
+  nlqCapabilities,
+  nlqExampleQuestions,
+  usesPermitHistory,
   PERMIT_FILTER_MODES,
   POOL_FILTER_MODES,
   PROPERTY_TYPES,
@@ -59,7 +60,13 @@ function resolveParser(): { config: NlqModelConfig; parser: NlqParser } | null {
   const config = readNlqModelConfig();
   if (!config) return null;
   if (parserCache && parserCache.config.modelId === config.modelId) return parserCache;
-  parserCache = { config, parser: createNlqParser({ model: nlqModel(config) }) };
+  parserCache = {
+    config,
+    parser: createNlqParser({
+      model: nlqModel(config),
+      permitsAvailable: propertySource.permitsAvailable,
+    }),
+  };
   return parserCache;
 }
 
@@ -77,12 +84,14 @@ export const nlqRouter = router({
    */
   config: publicProcedure.query(() => {
     const resolved = readNlqModelConfig();
+    const { permitsAvailable } = propertySource;
     return {
       enabled: resolved !== null,
       modelId: resolved?.modelId ?? null,
       region: resolved?.region ?? null,
-      examples: NLQ_EXAMPLE_QUESTIONS,
-      capabilities: NLQ_CAPABILITIES,
+      permitsAvailable,
+      examples: nlqExampleQuestions(permitsAvailable),
+      capabilities: nlqCapabilities(permitsAvailable),
       message: resolved === null ? DISABLED_MESSAGE : null,
       /** Published so the UI's chips and the API's parser cannot disagree about the vocabulary. */
       vocabulary: {
@@ -95,6 +104,9 @@ export const nlqRouter = router({
 
   ask: publicProcedure.input(askInput).mutation(async ({ input, ctx }) => {
     const parser = parserOverride ?? resolveParser()?.parser ?? null;
+    const { permitsAvailable } = propertySource;
+    const examples = nlqExampleQuestions(permitsAvailable);
+    const capabilities = nlqCapabilities(permitsAvailable);
 
     if (!parser) {
       ctx.logger.warn('Natural-language query attempted with no model configured');
@@ -102,8 +114,8 @@ export const nlqRouter = router({
         status: 'unavailable' as const,
         question: input.question,
         message: DISABLED_MESSAGE,
-        examples: NLQ_EXAMPLE_QUESTIONS,
-        capabilities: NLQ_CAPABILITIES,
+        examples,
+        capabilities,
       };
     }
 
@@ -130,8 +142,8 @@ export const nlqRouter = router({
         question: input.question,
         message:
           'I could not reach the language model just now, so the question was not translated. Nothing was applied to the map — the filters on the left still work.',
-        examples: NLQ_EXAMPLE_QUESTIONS,
-        capabilities: NLQ_CAPABILITIES,
+        examples,
+        capabilities,
       };
     }
 
@@ -146,12 +158,34 @@ export const nlqRouter = router({
         status: 'refused' as const,
         question: input.question,
         message: `${REFUSAL_PREFIX} ${grounded.reason}`,
-        examples: NLQ_EXAMPLE_QUESTIONS,
-        capabilities: NLQ_CAPABILITIES,
+        examples,
+        capabilities,
       };
     }
 
     const { query } = grounded;
+
+    /**
+     * A permit question against a dataset with no permit history is refused, not answered.
+     *
+     * The manual filter panel can afford to ignore an unsupported filter and say so, because
+     * the operator still gets the rest of their query. A question *about* permits has nothing
+     * left once the permit clause is dropped — "roofing permits open over 3 years in Oviedo"
+     * would silently become "parcels in Oviedo" and return thousands of rows that answer a
+     * question nobody asked.
+     */
+    if (!permitsAvailable && usesPermitHistory(query.filters, query.sort)) {
+      ctx.logger.info('Natural-language query refused: permit history unavailable', {
+        question: input.question,
+      });
+      return {
+        status: 'refused' as const,
+        question: input.question,
+        message: `${REFUSAL_PREFIX} The published county dataset carries parcels only, with no permit history, so I cannot filter on permits or say how long one has been open.`,
+        examples,
+        capabilities,
+      };
+    }
 
     // The same call the SPA is about to make. Running it here is what lets the summary state
     // a count that the rows will bear out.
@@ -194,7 +228,7 @@ export const nlqRouter = router({
         inRadius: result.totalInRadius,
         unknownRoofAgeInRadius: result.unknownRoofAgeInRadius,
       },
-      examples: NLQ_EXAMPLE_QUESTIONS,
+      examples,
     };
   }),
 });

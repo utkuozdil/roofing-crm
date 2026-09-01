@@ -197,7 +197,7 @@ export function RagChatMount({
 
   return (
     <section
-      className="panel rag-panel"
+      className="panel rag-panel rag-panel--compact"
       data-testid="rag-chat-mount"
       data-enabled={isEnabled ? 'true' : 'false'}
       aria-labelledby="rag-heading"
@@ -205,7 +205,7 @@ export function RagChatMount({
       <header className="rag-head">
         <h2 id="rag-heading">Ask the agent</h2>
         <span
-          className={`pill ${isEnabled ? 'pill--ok' : 'pill--warn'}`}
+          className={`pill ${isEnabled ? 'pill--ok' : 'pill--warn'}${statusKind === 'ready' ? ' visually-hidden' : ''}`}
           data-testid="rag-status"
           data-state={statusKind}
         >
@@ -213,24 +213,20 @@ export function RagChatMount({
         </span>
       </header>
 
-      <p className="note">
-        Ask in plain English. The question is translated into this app’s own filters, applied to the
-        map and the candidate list, and echoed back below so you can see exactly what was searched.
-      </p>
-
       <form
+        className="rag-compose"
         onSubmit={(event) => {
           event.preventDefault();
           void ask(question);
         }}
       >
         <label className="field" htmlFor="rag-chat-input">
-          <span>Question</span>
+          <span className="visually-hidden">Question</span>
           <textarea
             id="rag-chat-input"
             data-testid="rag-chat-input"
             name="ragQuestion"
-            rows={2}
+            rows={1}
             maxLength={MAX_QUESTION_LENGTH}
             disabled={!isEnabled}
             aria-disabled={!isEnabled}
@@ -264,8 +260,8 @@ export function RagChatMount({
         than being a hint that disappears when the feature is off.
       */}
       <div className="rag-examples">
-        <p className="note" id="rag-examples-heading">
-          Questions this can answer:
+        <p className="visually-hidden" id="rag-examples-heading">
+          Example questions
         </p>
         <ul data-testid="rag-examples">
           {NLQ_EXAMPLE_QUESTIONS.map((example, index) => (
@@ -322,7 +318,7 @@ export function RagChatMount({
             {state.summary}
           </p>
 
-          <ul className="rag-criteria" data-testid="rag-criteria">
+          <ul className="rag-criteria visually-hidden" data-testid="rag-criteria">
             {state.criteria.map((criterion) => (
               <li
                 key={criterion.key}
@@ -335,7 +331,7 @@ export function RagChatMount({
             ))}
           </ul>
 
-          <p className="note note--ok" data-testid="rag-applied">
+          <p className="visually-hidden" data-testid="rag-applied">
             Applied to the map, the search panel, and the candidate list.
           </p>
 
@@ -387,7 +383,7 @@ export function RagChatMount({
         </p>
       )}
 
-      <p className="note mono" data-testid="rag-context-preview">
+      <p className="visually-hidden" data-testid="rag-context-preview">
         Map context sent with each question — centre{' '}
         {formatCoordinates(center.latitude, center.longitude)}, radius {radiusMiles} mi, roof age ≥{' '}
         {filters.minRoofAgeYears} y, permits {filters.permitStatus}, {resultCount} properties

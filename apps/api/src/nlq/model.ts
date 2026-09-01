@@ -12,7 +12,7 @@
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import { AWS_REGION } from '@roofing-crm/shared';
-import type { LanguageModel } from 'ai';
+import { wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
 
 export interface NlqModelConfig {
   modelId: string;
@@ -45,7 +45,65 @@ export function nlqModel(config: NlqModelConfig): LanguageModel {
      */
     credentialProvider: fromNodeProviderChain(),
   });
-  const model = bedrock(config.modelId);
+  const model = wrapLanguageModel({
+    model: bedrock(config.modelId),
+    middleware: jsonSchemaAsToolMiddleware,
+  });
   cached = { key, model };
   return model;
 }
+
+/**
+ * Sends the response schema as a forced tool rather than as Bedrock's `output_config.format`.
+ *
+ * Bedrock validates Converse requests against its own copy of the Anthropic Messages schema,
+ * and that copy rejects `output_config.format` for Claude Haiku 4.5 with
+ * `Extra inputs are not permitted`. The AI SDK decides which of the two encodings to use from a
+ * capability table that says this model supports the newer one, and its Bedrock-specific
+ * exception list does not yet name it — so left alone, every question fails with a 400.
+ *
+ * The tool encoding is the older, universally accepted route to the same thing, and it is what
+ * the SDK itself falls back to for the models on that exception list. Presenting the schema as a
+ * single required tool keeps this a one-shot structured extraction: there is no tool *loop* here,
+ * no second round trip, and `generateObject` still validates the result against the Zod schema.
+ *
+ * Safe to remove once the provider's exception list names this model, at which point the SDK
+ * would pick the tool encoding by itself. Until then `model.test.ts` pins the transformation, so
+ * the workaround cannot be quietly broken by an edit here.
+ */
+const jsonResponseToolName = 'json';
+
+export const jsonSchemaAsToolMiddleware: LanguageModelMiddleware = {
+  transformParams: async ({ params }) => {
+    const schema =
+      params.responseFormat?.type === 'json' ? params.responseFormat.schema : undefined;
+    if (schema === undefined) return params;
+
+    return {
+      ...params,
+      responseFormat: { type: 'text' },
+      toolChoice: { type: 'tool', toolName: jsonResponseToolName },
+      tools: [
+        {
+          type: 'function',
+          name: jsonResponseToolName,
+          description: 'Respond with a JSON object matching the schema.',
+          inputSchema: schema,
+        },
+      ],
+    };
+  },
+  /** Unwraps the tool call back into the text `generateObject` expects to parse. */
+  wrapGenerate: async ({ doGenerate }) => {
+    const result = await doGenerate();
+    const call = result.content.find(
+      (part) => part.type === 'tool-call' && part.toolName === jsonResponseToolName,
+    );
+    if (call === undefined || call.type !== 'tool-call') return result;
+
+    return {
+      ...result,
+      content: [{ type: 'text', text: call.input }],
+    };
+  },
+};

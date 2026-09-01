@@ -1,4 +1,4 @@
-import type { GeoPoint } from '@roofing-crm/shared';
+import { type GeoPoint, isInsideCounty } from '@roofing-crm/shared';
 import { useCallback, useState } from 'react';
 
 /**
@@ -10,7 +10,8 @@ import { useCallback, useState } from 'react';
  * rendering. Nothing in the product is reachable only through GPS.
  */
 
-export type GeolocationStatus = 'idle' | 'requesting' | 'granted' | 'unavailable' | 'denied';
+export type GeolocationStatus =
+  'idle' | 'requesting' | 'granted' | 'unavailable' | 'denied' | 'outside_county';
 
 export interface GeolocationState {
   status: GeolocationStatus;
@@ -19,7 +20,7 @@ export interface GeolocationState {
 
 const IDLE: GeolocationState = {
   status: 'idle',
-  message: 'GPS centring is optional — the location field below sets the same centre.',
+  message: 'GPS is optional — a Seminole city, ZIP, or a pin sets the same centre.',
 };
 
 /** Long enough for a real fix, short enough that a headless run is never left hanging. */
@@ -33,7 +34,7 @@ export function useGeolocation(onLocated: (point: GeoPoint) => void) {
       setState({
         status: 'unavailable',
         message:
-          'This browser exposes no geolocation API. Set the centre with the location field instead.',
+          'This browser exposes no geolocation API. Set the centre with a Seminole city, ZIP, or a pin.',
       });
       return;
     }
@@ -46,6 +47,20 @@ export function useGeolocation(onLocated: (point: GeoPoint) => void) {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
         };
+
+        /**
+         * A fix outside the county is reported rather than used. The dataset covers Seminole
+         * County only, so centring there would return nothing and look like a failed search
+         * instead of a device that is simply somewhere else.
+         */
+        if (!isInsideCounty(point)) {
+          setState({
+            status: 'outside_county',
+            message: `Your position (${point.latitude.toFixed(3)}, ${point.longitude.toFixed(3)}) is outside Seminole County, which is all this CRM holds. The map kept its previous centre.`,
+          });
+          return;
+        }
+
         setState({
           status: 'granted',
           message: `Centred on your position, accurate to about ${Math.round(position.coords.accuracy)} m.`,
@@ -57,7 +72,7 @@ export function useGeolocation(onLocated: (point: GeoPoint) => void) {
           status: error.code === error.PERMISSION_DENIED ? 'denied' : 'unavailable',
           message:
             error.code === error.PERMISSION_DENIED
-              ? 'Location permission was denied. The map kept its previous centre — use the location field to move it.'
+              ? 'Location permission was denied. The map kept its previous centre.'
               : `Could not obtain a position (${error.message || 'unknown error'}). The map kept its previous centre.`,
         });
       },

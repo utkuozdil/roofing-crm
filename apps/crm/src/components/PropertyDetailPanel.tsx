@@ -1,7 +1,7 @@
 import {
   PERMIT_STATUS_FACTS,
   SEMINOLE_ROOFING_APPLICATION_TYPES,
-  isOutOfAreaOwner,
+  resolveOutOfAreaOwner,
   isUnresolvedPermitStatus,
   permitDuration,
   permitNaturalKey,
@@ -22,12 +22,22 @@ import {
 
 export interface PropertyDetailPanelProps {
   property: PropertyDetail | null;
+  /**
+   * Whether the dataset behind this panel carries permit history at all.
+   *
+   * Without it an empty permit list would read as "the county has no permits for this parcel",
+   * which is a claim about the parcel. The published snapshot carries parcels only, so the
+   * truthful statement is about the dataset instead.
+   */
+  permitsAvailable: boolean;
   isLoading: boolean;
   onClose: () => void;
   onCreateLead: (input: { notes: string; source: string }) => Promise<void>;
   createState: { status: 'idle' | 'saving' | 'created' | 'error'; message: string | null };
   existingLeadCount: number;
 }
+
+const PERMITS_PER_PAGE = 5;
 
 const PERMIT_DURATION_LABELS: Record<PermitDurationState, string> = {
   open: 'Open for',
@@ -67,6 +77,7 @@ function ContractorCell({ permit, index }: { permit: PermitRecord; index: number
 
 export function PropertyDetailPanel({
   property,
+  permitsAvailable,
   isLoading,
   onClose,
   onCreateLead,
@@ -74,11 +85,13 @@ export function PropertyDetailPanel({
   existingLeadCount,
 }: PropertyDetailPanelProps) {
   const [notes, setNotes] = useState('');
+  const [permitPage, setPermitPage] = useState(0);
 
-  // Notes belong to the property being viewed, not to the panel, so switching properties
-  // must not carry a half-typed note across to a different parcel.
+  // Notes and pager belong to the property being viewed, so switching parcels
+  // must not carry a half-typed note or a page offset across to a different one.
   useEffect(() => {
     setNotes('');
+    setPermitPage(0);
   }, [property?.parcel_id]);
 
   if (isLoading) {
@@ -94,21 +107,31 @@ export function PropertyDetailPanel({
       <div className="panel detail-panel" data-testid="property-detail-empty">
         <h2>Property detail</h2>
         <p className="note">
-          Select a pin on the map or a row in the candidate list to see ownership, valuation, and
-          permit history.
+          Select a pin on the map or a row in the candidate list to see ownership, valuation
+          {permitsAvailable ? ', and permit history' : ' and roof age'}.
         </p>
       </div>
     );
   }
 
   const now = new Date();
-  const outOfArea = isOutOfAreaOwner(property.mailing_city_state_zip);
+  const outOfArea = resolveOutOfAreaOwner(property);
   const display = propertyDisplay(property);
   const suggestedSource = property.permits.some(
     (permit) => permit.is_roofing && isUnresolvedPermitStatus(permit.status),
   )
     ? 'Unresolved roofing permit'
     : `Roof age ${property.roof_age_years ?? 'unknown'} years`;
+
+  const permitCount = property.permits.length;
+  const permitPageCount = Math.max(1, Math.ceil(permitCount / PERMITS_PER_PAGE));
+  const currentPermitPage = Math.min(permitPage, permitPageCount - 1);
+  const permitFrom = permitCount === 0 ? 0 : currentPermitPage * PERMITS_PER_PAGE + 1;
+  const permitTo = Math.min(permitCount, (currentPermitPage + 1) * PERMITS_PER_PAGE);
+  const pagedPermits = property.permits.slice(
+    currentPermitPage * PERMITS_PER_PAGE,
+    (currentPermitPage + 1) * PERMITS_PER_PAGE,
+  );
 
   return (
     <div className="panel detail-panel" data-testid="property-detail">
@@ -209,78 +232,119 @@ export function PropertyDetailPanel({
       </dl>
 
       <section className="detail-section">
-        <h3>Permits</h3>
+        <div className="permit-section-head">
+          <h3>Permits</h3>
+          {permitCount > 0 && (
+            <p className="note" data-testid="permit-page-status">
+              {permitFrom}–{permitTo} of {permitCount}
+            </p>
+          )}
+        </div>
         {property.permits.length === 0 ? (
-          <p className="note" data-testid="permits-empty">
-            No permits on record for this parcel.
+          <p
+            className={permitsAvailable ? 'note' : 'note note--warn'}
+            data-testid="permits-empty"
+            data-reason={permitsAvailable ? 'none-for-parcel' : 'not-published'}
+          >
+            {permitsAvailable
+              ? 'No permits on record for this parcel.'
+              : 'Permit history is not part of the published county dataset, so nothing is known about permits for this parcel either way.'}
           </p>
         ) : (
-          <ul className="permit-list" data-testid="permit-list">
-            {property.permits.map((permit, index) => {
-              const duration = permitDuration(permit, now);
-              const unresolved = isUnresolvedPermitStatus(permit.status);
-              return (
-                // An application number covers several structures and permit types, so the
-                // natural key is what keeps sibling rows distinct.
-                <li key={permitNaturalKey(permit)} className="permit" data-testid="permit-row">
-                  <div className="permit-head">
-                    <strong>{permit.permit_type}</strong>
-                    <span
-                      className={`pill ${unresolved ? 'pill--bad' : 'pill--ok'}`}
-                      data-testid={`permit-status-${index}`}
-                    >
-                      {PERMIT_STATUS_FACTS[permit.status].label}
-                    </span>
-                    {permit.is_roofing && (
-                      <span className="pill pill--warn" data-testid={`permit-roofing-${index}`}>
-                        Roofing
+          <>
+            <ul className="permit-list" data-testid="permit-list">
+              {pagedPermits.map((permit, pageIndex) => {
+                const index = currentPermitPage * PERMITS_PER_PAGE + pageIndex;
+                const duration = permitDuration(permit, now);
+                const unresolved = isUnresolvedPermitStatus(permit.status);
+                return (
+                  // An application number covers several structures and permit types, so the
+                  // natural key is what keeps sibling rows distinct.
+                  <li key={permitNaturalKey(permit)} className="permit" data-testid="permit-row">
+                    <div className="permit-head">
+                      <strong>{permit.permit_type}</strong>
+                      <span
+                        className={`pill ${unresolved ? 'pill--bad' : 'pill--ok'}`}
+                        data-testid={`permit-status-${index}`}
+                      >
+                        {PERMIT_STATUS_FACTS[permit.status].label}
                       </span>
-                    )}
-                  </div>
-                  <p className="muted">{permit.description}</p>
-                  <dl className="permit-grid">
-                    <dt>Permit</dt>
-                    <dd className="mono">{permitNaturalKey(permit)}</dd>
-                    <dt>Type code</dt>
-                    <dd className="mono" data-testid={`permit-type-code-${index}`}>
-                      {permit.application_type_code ?? NOT_AVAILABLE}
-                      {permit.application_type_code &&
-                        permit.application_type_code in SEMINOLE_ROOFING_APPLICATION_TYPES && (
-                          <small className="muted">
-                            {SEMINOLE_ROOFING_APPLICATION_TYPES[permit.application_type_code]}
-                          </small>
-                        )}
-                    </dd>
-                    <dt>Issued</dt>
-                    <dd>{formatDate(permit.issued_date)}</dd>
-                    <dt>{PERMIT_DURATION_LABELS[duration.state]}</dt>
-                    <dd
-                      data-testid={`permit-duration-${index}`}
-                      data-duration-state={duration.state}
-                    >
-                      {duration.state === 'open' && formatYears(duration.years)}
-                      {duration.state === 'resolved' && formatDate(duration.resolvedOn)}
-                      {duration.state === 'void' && 'Application voided'}
-                      {/*
-                        The source has no explicit close date — resolution is the terminal
-                        inspection's result date. When that inspection was not captured the
-                        duration is genuinely unknown, and "0 years" would be a fabrication.
-                      */}
-                      {duration.state === 'unrecorded' && (
-                        <span className="muted">No terminal inspection date recorded</span>
+                      {permit.is_roofing && (
+                        <span className="pill pill--warn" data-testid={`permit-roofing-${index}`}>
+                          Roofing
+                        </span>
                       )}
-                    </dd>
-                    <dt>Valuation</dt>
-                    <dd>{formatCurrency(permit.valuation)}</dd>
-                    <dt>Contractor</dt>
-                    <dd>
-                      <ContractorCell permit={permit} index={index} />
-                    </dd>
-                  </dl>
-                </li>
-              );
-            })}
-          </ul>
+                    </div>
+                    <p className="muted">{permit.description}</p>
+                    <dl className="permit-grid">
+                      <dt>Permit</dt>
+                      <dd className="mono">{permitNaturalKey(permit)}</dd>
+                      <dt>Type code</dt>
+                      <dd className="mono" data-testid={`permit-type-code-${index}`}>
+                        {permit.application_type_code ?? NOT_AVAILABLE}
+                        {permit.application_type_code &&
+                          permit.application_type_code in SEMINOLE_ROOFING_APPLICATION_TYPES && (
+                            <small className="muted">
+                              {SEMINOLE_ROOFING_APPLICATION_TYPES[permit.application_type_code]}
+                            </small>
+                          )}
+                      </dd>
+                      <dt>Issued</dt>
+                      <dd>{formatDate(permit.issued_date)}</dd>
+                      <dt>{PERMIT_DURATION_LABELS[duration.state]}</dt>
+                      <dd
+                        data-testid={`permit-duration-${index}`}
+                        data-duration-state={duration.state}
+                      >
+                        {duration.state === 'open' && formatYears(duration.years)}
+                        {duration.state === 'resolved' && formatDate(duration.resolvedOn)}
+                        {duration.state === 'void' && 'Application voided'}
+                        {/*
+                          The source has no explicit close date — resolution is the terminal
+                          inspection's result date. When that inspection was not captured the
+                          duration is genuinely unknown, and "0 years" would be a fabrication.
+                        */}
+                        {duration.state === 'unrecorded' && (
+                          <span className="muted">No terminal inspection date recorded</span>
+                        )}
+                      </dd>
+                      <dt>Valuation</dt>
+                      <dd>{formatCurrency(permit.valuation)}</dd>
+                      <dt>Contractor</dt>
+                      <dd>
+                        <ContractorCell permit={permit} index={index} />
+                      </dd>
+                    </dl>
+                  </li>
+                );
+              })}
+            </ul>
+            {permitPageCount > 1 && (
+              <div className="permit-pager" data-testid="permit-pager">
+                <button
+                  className="button"
+                  type="button"
+                  data-testid="permit-page-prev"
+                  disabled={currentPermitPage === 0}
+                  onClick={() => setPermitPage((page) => Math.max(0, page - 1))}
+                >
+                  Previous
+                </button>
+                <span className="note" data-testid="permit-page-label">
+                  Page {currentPermitPage + 1} of {permitPageCount}
+                </span>
+                <button
+                  className="button"
+                  type="button"
+                  data-testid="permit-page-next"
+                  disabled={currentPermitPage >= permitPageCount - 1}
+                  onClick={() => setPermitPage((page) => Math.min(permitPageCount - 1, page + 1))}
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </>
         )}
       </section>
 

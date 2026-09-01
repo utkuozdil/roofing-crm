@@ -294,8 +294,7 @@ export function MapCanvas({
       </svg>
 
       <p className="map-hint" data-testid="map-hint">
-        Click the map to drop a pin, or set the centre with the location field. Pan and zoom use the
-        buttons below — no dragging is required anywhere in this UI.
+        Click the map to drop a pin.
       </p>
     </div>
   );
