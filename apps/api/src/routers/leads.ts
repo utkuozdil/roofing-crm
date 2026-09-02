@@ -1,7 +1,6 @@
 import { LEAD_STATUSES } from '@roofing-crm/shared';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { enrichLead, enrichLeads } from '../leads/enrich';
 import {
   LeadNotFoundError,
   createLead,
@@ -56,16 +55,14 @@ export const leadsRouter = router({
   list: publicProcedure.input(listInput.optional()).query(async ({ input, ctx }) => {
     const limit = input?.limit ?? 50;
     ctx.logger.info('Listing leads', { limit });
-    const page = await listLeads(limit);
-    return { ...page, items: await enrichLeads(page.items) };
+    // Table only. Filter facts are written at create time. Do not load the
+    // county snapshot here — that is what made the pipeline wait on a cold Lambda.
+    return listLeads(limit);
   }),
 
   get: publicProcedure
     .input(z.object({ leadId: z.string().min(1) }))
-    .query(async ({ input }) => {
-      const lead = await getLead(input.leadId);
-      return lead ? enrichLead(lead) : null;
-    }),
+    .query(async ({ input }) => getLead(input.leadId)),
 
   create: publicProcedure.input(createInput).mutation(async ({ input, ctx }) => {
     const lead = await createLead(input);
