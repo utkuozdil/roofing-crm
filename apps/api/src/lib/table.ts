@@ -110,7 +110,20 @@ export interface CreateLeadInput {
   status?: LeadStatus;
 }
 
+export async function findLeadByParcelId(parcelId: string): Promise<LeadRecord | null> {
+  const page = await listLeads(100);
+  return page.items.find((lead) => lead.parcelId === parcelId) ?? null;
+}
+
 export async function createLead(input: CreateLeadInput): Promise<LeadRecord> {
+  const existing = await findLeadByParcelId(input.parcelId);
+  if (existing !== null) {
+    if (input.notes !== '' && input.notes !== existing.notes) {
+      return updateLead({ leadId: existing.leadId, notes: input.notes });
+    }
+    return existing;
+  }
+
   const leadId = randomUUID();
   const createdAt = new Date().toISOString();
 

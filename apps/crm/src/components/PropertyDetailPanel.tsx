@@ -372,10 +372,14 @@ export function PropertyDetailPanel({
           className="button button--primary"
           type="button"
           data-testid="create-lead-button"
-          disabled={createState.status === 'saving'}
+          disabled={createState.status === 'saving' || existingLeadCount > 0}
           onClick={() => void onCreateLead({ notes, source: suggestedSource })}
         >
-          {createState.status === 'saving' ? 'Creating lead…' : 'Create lead from this property'}
+          {createState.status === 'saving'
+            ? 'Creating lead…'
+            : existingLeadCount > 0
+              ? 'Already saved as a lead'
+              : 'Create lead from this property'}
         </button>
         {createState.message && (
           <p

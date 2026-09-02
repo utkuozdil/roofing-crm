@@ -79,17 +79,28 @@ export function useLeads() {
     setCreateState({ status: 'saving', message: null });
     try {
       const lead = await api.leads.create.mutate(args);
-      // Prepend the returned record rather than refetching: GSI1 is eventually consistent,
-      // so an immediate re-read can legitimately come back without the row just written.
-      setLeads((current) => [lead, ...current]);
+      // Prepend only a new id. A second click on the same parcel returns the existing row.
+      const alreadySaved = leads.some(
+        (row) => row.leadId === lead.leadId || row.parcelId === lead.parcelId,
+      );
+      setLeads((current) => {
+        if (current.some((row) => row.leadId === lead.leadId || row.parcelId === lead.parcelId)) {
+          return current.map((row) =>
+            row.leadId === lead.leadId || row.parcelId === lead.parcelId ? lead : row,
+          );
+        }
+        return [lead, ...current];
+      });
       setCreateState({
         status: 'created',
-        message: `Lead created for ${lead.primaryAddress}. See it in Lead pipeline.`,
+        message: alreadySaved
+          ? `Already a lead for ${lead.primaryAddress}. See it in Lead pipeline.`
+          : `Lead created for ${lead.primaryAddress}. See it in Lead pipeline.`,
       });
     } catch (caught) {
       setCreateState({ status: 'error', message: `Could not create lead: ${describe(caught)}` });
     }
-  }, []);
+  }, [leads]);
 
   const updateStatus = useCallback(
     async (leadId: string, status: LeadStatus) => {

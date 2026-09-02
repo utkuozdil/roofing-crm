@@ -118,6 +118,7 @@ describe('getLead', () => {
 
 describe('createLead', () => {
   it('writes the lead with its GSI1 recency keys and a generated id', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
     ddbMock.on(PutCommand).resolves({});
 
     const lead = await createLead({
@@ -143,8 +144,25 @@ describe('createLead', () => {
     });
   });
 
+  it('returns the existing lead instead of minting a second row for the same parcel', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [STORED_LEAD] });
+
+    const lead = await createLead({
+      parcelId: STORED_LEAD.parcelId,
+      ownerName: 'OTHER',
+      primaryAddress: 'OTHER',
+      roofAgeYears: 10,
+      source: 's',
+      notes: '',
+    });
+
+    expect(lead.leadId).toBe('abc');
+    expect(ddbMock.commandCalls(PutCommand)).toHaveLength(0);
+  });
+
   /** Guards against a retried invocation overwriting an existing lead. */
   it('refuses to overwrite an existing item', async () => {
+    ddbMock.on(QueryCommand).resolves({ Items: [] });
     ddbMock.on(PutCommand).resolves({});
     await createLead({
       parcelId: 'p',
